@@ -37,11 +37,18 @@ dotnet build
 # Run tests
 cd ../sim-core.Tests
 dotnet test
-
-# Godot client requires Godot 4.3+ with C# support
-cd ../client-godot
-# Open in Godot editor and run
 ```
+
+## Run Locally
+
+1. Install **Godot 4.x .NET** (version 4.3 or higher)
+2. Open `client-godot/project.godot` in Godot Editor
+3. Press **F5** to run
+
+### Troubleshooting
+
+If the project doesn't start, verify in Godot Editor:
+- **Project → Project Settings → Application → Run → Main Scene** = `res://Scenes/Main.tscn`
 
 ## Content Schema
 
