@@ -1,0 +1,12 @@
+{
+  "id": "beta-hub",
+  "name": "Beta Prime Station", 
+  "faction": "fed",
+  "market": {
+    "food": { "supply": 40, "demand": 100 },
+    "parts": { "supply": 80, "demand": 30 },
+    "medicine": { "supply": 20, "demand": 60 }
+  },
+  "modules": ["Market", "Dock", "SolarArray"],
+  "energy": { "prod": 18, "cons": 12 }
+}

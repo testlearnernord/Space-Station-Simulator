@@ -1,0 +1,12 @@
+{
+  "id": "delta-trading",
+  "name": "Delta Trading Post",
+  "faction": "corp",
+  "market": {
+    "luxury": { "supply": 50, "demand": 20 },
+    "food": { "supply": 30, "demand": 80 },
+    "fuel": { "supply": 40, "demand": 60 }
+  },
+  "modules": ["Market", "Dock"],
+  "energy": { "prod": 8, "cons": 7 }
+}

@@ -1,0 +1,12 @@
+{
+  "id": "beta-factory",
+  "name": "Beta Manufacturing",
+  "faction": "fed", 
+  "market": {
+    "ore": { "supply": 10, "demand": 120 },
+    "parts": { "supply": 100, "demand": 15 },
+    "fuel": { "supply": 50, "demand": 70 }
+  },
+  "modules": ["Factory", "Factory", "SolarArray"],
+  "energy": { "prod": 14, "cons": 16 }
+}

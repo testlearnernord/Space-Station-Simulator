@@ -1,0 +1,11 @@
+{
+  "id": "alpha-mine",
+  "name": "Alpha Mining Platform",
+  "faction": "corp",
+  "market": { 
+    "ore": { "supply": 150, "demand": 20 },
+    "fuel": { "supply": 10, "demand": 80 }
+  },
+  "modules": ["Factory", "SolarArray"],
+  "energy": { "prod": 12, "cons": 10 }
+}

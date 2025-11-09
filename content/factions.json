@@ -1,0 +1,5 @@
+[
+  { "id": "corp", "name": "Corporate Syndicate", "tax": 0.06, "tradeBias": 0.10 },
+  { "id": "fed",  "name": "Federation", "tax": 0.02, "tradeBias": 0.00 },
+  { "id": "syn",  "name": "Syndicate", "tax": 0.00, "tradeBias": -0.05 }
+]

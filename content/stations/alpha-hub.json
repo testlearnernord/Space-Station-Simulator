@@ -1,0 +1,12 @@
+{
+  "id": "alpha-hub",
+  "name": "Alpha Central Hub",
+  "faction": "corp",
+  "market": { 
+    "food": { "supply": 90, "demand": 50 }, 
+    "parts": { "supply": 30, "demand": 70 },
+    "fuel": { "supply": 120, "demand": 40 }
+  },
+  "modules": ["SolarArray", "Market", "Dock"],
+  "energy": { "prod": 15, "cons": 8 }
+}

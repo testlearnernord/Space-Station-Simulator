@@ -1,0 +1,11 @@
+{
+  "id": "delta-refinery",
+  "name": "Delta Fuel Refinery",
+  "faction": "fed",
+  "market": {
+    "fuel": { "supply": 200, "demand": 10 },
+    "ore": { "supply": 5, "demand": 150 }
+  },
+  "modules": ["Factory", "SolarArray", "SolarArray"],
+  "energy": { "prod": 20, "cons": 18 }
+}

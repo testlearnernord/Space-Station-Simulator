@@ -1,0 +1,16 @@
+{
+  "systems": [
+    { "id": "alpha", "name": "Alpha Centauri", "pos": [0, 0], "stations": ["alpha-hub", "alpha-mine"] },
+    { "id": "beta",  "name": "Beta Prime", "pos": [15, 8], "stations": ["beta-hub", "beta-factory"] },
+    { "id": "gamma", "name": "Gamma Station", "pos": [8, -12], "stations": ["gamma-hub"] },
+    { "id": "delta", "name": "Delta Outpost", "pos": [-10, 15], "stations": ["delta-trading", "delta-refinery"] },
+    { "id": "epsilon", "name": "Epsilon Colony", "pos": [25, -5], "stations": ["epsilon-market"] },
+    { "id": "zeta", "name": "Zeta Research", "pos": [-8, -10], "stations": ["zeta-lab", "zeta-dock"] }
+  ],
+  "hyperlanes": [
+    ["alpha", "beta"], ["alpha", "gamma"], 
+    ["beta", "delta"], ["beta", "epsilon"],
+    ["gamma", "zeta"], ["delta", "epsilon"],
+    ["epsilon", "zeta"]
+  ]
+}
