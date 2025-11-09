@@ -1,20 +1,20 @@
 {
   "format": 1,
   "restore": {
-    "/workspaces/Space-Station-Simulator/sim-core.Tests/sim-core.Tests.csproj": {}
+    "/home/runner/work/Space-Station-Simulator/Space-Station-Simulator/sim-core.Tests/sim-core.Tests.csproj": {}
   },
   "projects": {
-    "/workspaces/Space-Station-Simulator/sim-core.Tests/sim-core.Tests.csproj": {
+    "/home/runner/work/Space-Station-Simulator/Space-Station-Simulator/sim-core.Tests/sim-core.Tests.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "/workspaces/Space-Station-Simulator/sim-core.Tests/sim-core.Tests.csproj",
+        "projectUniqueName": "/home/runner/work/Space-Station-Simulator/Space-Station-Simulator/sim-core.Tests/sim-core.Tests.csproj",
         "projectName": "sim-core.Tests",
-        "projectPath": "/workspaces/Space-Station-Simulator/sim-core.Tests/sim-core.Tests.csproj",
-        "packagesPath": "/home/codespace/.nuget/packages/",
-        "outputPath": "/workspaces/Space-Station-Simulator/sim-core.Tests/obj/",
+        "projectPath": "/home/runner/work/Space-Station-Simulator/Space-Station-Simulator/sim-core.Tests/sim-core.Tests.csproj",
+        "packagesPath": "/home/runner/work/Space-Station-Simulator/.codeql-scratch/dbs/csharp/working/packages",
+        "outputPath": "/home/runner/work/Space-Station-Simulator/Space-Station-Simulator/sim-core.Tests/obj/",
         "projectStyle": "PackageReference",
         "configFilePaths": [
-          "/home/codespace/.nuget/NuGet/NuGet.Config"
+          "/home/runner/.nuget/NuGet/NuGet.Config"
         ],
         "originalTargetFrameworks": [
           "net8.0"
@@ -26,8 +26,8 @@
           "net8.0": {
             "targetAlias": "net8.0",
             "projectReferences": {
-              "/workspaces/Space-Station-Simulator/sim-core/sim-core.csproj": {
-                "projectPath": "/workspaces/Space-Station-Simulator/sim-core/sim-core.csproj"
+              "/home/runner/work/Space-Station-Simulator/Space-Station-Simulator/sim-core/sim-core.csproj": {
+                "projectPath": "/home/runner/work/Space-Station-Simulator/Space-Station-Simulator/sim-core/sim-core.csproj"
               }
             }
           }
@@ -42,7 +42,8 @@
           "enableAudit": "true",
           "auditLevel": "low",
           "auditMode": "direct"
-        }
+        },
+        "SdkAnalysisLevel": "9.0.300"
       },
       "frameworks": {
         "net8.0": {
@@ -72,26 +73,36 @@
           ],
           "assetTargetFallback": true,
           "warn": true,
+          "downloadDependencies": [
+            {
+              "name": "Microsoft.AspNetCore.App.Ref",
+              "version": "[8.0.21, 8.0.21]"
+            },
+            {
+              "name": "Microsoft.NETCore.App.Ref",
+              "version": "[8.0.21, 8.0.21]"
+            }
+          ],
           "frameworkReferences": {
             "Microsoft.NETCore.App": {
               "privateAssets": "all"
             }
           },
-          "runtimeIdentifierGraphPath": "/usr/share/dotnet/sdk/8.0.412/PortableRuntimeIdentifierGraph.json"
+          "runtimeIdentifierGraphPath": "/usr/share/dotnet/sdk/9.0.306/PortableRuntimeIdentifierGraph.json"
         }
       }
     },
-    "/workspaces/Space-Station-Simulator/sim-core/sim-core.csproj": {
+    "/home/runner/work/Space-Station-Simulator/Space-Station-Simulator/sim-core/sim-core.csproj": {
       "version": "1.0.0",
       "restore": {
-        "projectUniqueName": "/workspaces/Space-Station-Simulator/sim-core/sim-core.csproj",
+        "projectUniqueName": "/home/runner/work/Space-Station-Simulator/Space-Station-Simulator/sim-core/sim-core.csproj",
         "projectName": "sim-core",
-        "projectPath": "/workspaces/Space-Station-Simulator/sim-core/sim-core.csproj",
-        "packagesPath": "/home/codespace/.nuget/packages/",
-        "outputPath": "/workspaces/Space-Station-Simulator/sim-core/obj/",
+        "projectPath": "/home/runner/work/Space-Station-Simulator/Space-Station-Simulator/sim-core/sim-core.csproj",
+        "packagesPath": "/home/runner/work/Space-Station-Simulator/.codeql-scratch/dbs/csharp/working/packages",
+        "outputPath": "/home/runner/work/Space-Station-Simulator/Space-Station-Simulator/sim-core/obj/",
         "projectStyle": "PackageReference",
         "configFilePaths": [
-          "/home/codespace/.nuget/NuGet/NuGet.Config"
+          "/home/runner/.nuget/NuGet/NuGet.Config"
         ],
         "originalTargetFrameworks": [
           "net8.0"
@@ -115,7 +126,8 @@
           "enableAudit": "true",
           "auditLevel": "low",
           "auditMode": "direct"
-        }
+        },
+        "SdkAnalysisLevel": "9.0.300"
       },
       "frameworks": {
         "net8.0": {
@@ -131,12 +143,22 @@
           ],
           "assetTargetFallback": true,
           "warn": true,
+          "downloadDependencies": [
+            {
+              "name": "Microsoft.AspNetCore.App.Ref",
+              "version": "[8.0.21, 8.0.21]"
+            },
+            {
+              "name": "Microsoft.NETCore.App.Ref",
+              "version": "[8.0.21, 8.0.21]"
+            }
+          ],
           "frameworkReferences": {
             "Microsoft.NETCore.App": {
               "privateAssets": "all"
             }
           },
-          "runtimeIdentifierGraphPath": "/usr/share/dotnet/sdk/8.0.412/PortableRuntimeIdentifierGraph.json"
+          "runtimeIdentifierGraphPath": "/usr/share/dotnet/sdk/9.0.306/PortableRuntimeIdentifierGraph.json"
         }
       }
     }

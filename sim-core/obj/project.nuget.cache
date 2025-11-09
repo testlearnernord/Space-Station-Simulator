@@ -1,8 +1,11 @@
 {
   "version": 2,
-  "dgSpecHash": "VAEYL/aZZ70=",
+  "dgSpecHash": "i/mP5SpiCVE=",
   "success": true,
-  "projectFilePath": "/workspaces/Space-Station-Simulator/sim-core/sim-core.csproj",
-  "expectedPackageFiles": [],
+  "projectFilePath": "/home/runner/work/Space-Station-Simulator/Space-Station-Simulator/sim-core/sim-core.csproj",
+  "expectedPackageFiles": [
+    "/home/runner/work/Space-Station-Simulator/.codeql-scratch/dbs/csharp/working/packages/microsoft.netcore.app.ref/8.0.21/microsoft.netcore.app.ref.8.0.21.nupkg.sha512",
+    "/home/runner/work/Space-Station-Simulator/.codeql-scratch/dbs/csharp/working/packages/microsoft.aspnetcore.app.ref/8.0.21/microsoft.aspnetcore.app.ref.8.0.21.nupkg.sha512"
+  ],
   "logs": []
 }
