@@ -1,41 +1,56 @@
-name: Export Godot
+name: Deploy Godot Web
 
 on:
   push:
-    tags: [ 'v*' ]
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
 
 jobs:
-  export:
+  build:
     runs-on: ubuntu-latest
-    
+
     steps:
     - uses: actions/checkout@v4
-    
+
     - name: Setup Godot
       uses: chickensoft-games/setup-godot@v1
       with:
         version: 4.3.0
         use-dotnet: true
-        
+
     - name: Verify Project
       run: |
         cd client-godot
         godot --headless --check-only --quit
-        
-    - name: Export Linux
+
+    - name: Export Web
       run: |
         cd client-godot
-        mkdir -p exports/linux
-        godot --headless --export-release "Linux/X11" exports/linux/space-station-sim
-        
-    - name: Export Windows
-      run: |
-        cd client-godot
-        mkdir -p exports/windows
-        godot --headless --export-release "Windows Desktop" exports/windows/space-station-sim.exe
-        
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v3
+        mkdir -p exports/web
+        godot --headless --export-release "Web" exports/web/index.html
+
+    - name: Upload Pages artifact
+      uses: actions/upload-pages-artifact@v3
       with:
-        name: exports
-        path: client-godot/exports/
+        path: client-godot/exports/web
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+    - name: Deploy to GitHub Pages
+      id: deployment
+      uses: actions/deploy-pages@v4

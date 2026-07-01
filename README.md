@@ -8,24 +8,21 @@ Single-player space-station management simulator with economic simulation, trade
 - `/sim-core.Tests/` - xUnit tests for pricing, pathing, AI, save/load
 - `/client-godot/` - Godot 4 C# client (top-down views, UI)
 - `/content/` - JSON data files (commodities, factions, systems, stations)
-- `/.github/workflows/` - CI pipelines (build, test, export)
+- `/.github/workflows/` - CI pipelines (build, test, web deploy)
 
-## Features (Minimal Viable Demo)
+## Features (Minimal Playable Demo)
 
-- **3 Factions**, **6 Systems**, **12 Stations**, **24 Commodities**
-- **Fixed 10Hz simulation** with deterministic RNG seeds
-- **Market system** with supply/demand pricing and distance modifiers
-- **Greedy trade AI** for 8 autonomous ships
-- **Energy management** with production/consumption and throttling
-- **Save/Load** with gzip compression and version stamps
-- **Galaxy map** with pan/zoom, clickable stations
-- **Event system** (demand shocks, blockades, escorts)
+- **4 trade stations** with continuously shifting supply and demand
+- **Fixed station pricing** calculated through `sim-core` market logic
+- **Mouse + keyboard trading gameplay loop** with clear win condition
+- **Deterministic economy ticks** with seeded variation over time
+- **Web export + GitHub Pages deployment** for in-browser play
 
 ## Controls
 
-- **WASD** - Pan galaxy view
-- **Mouse Wheel** - Zoom in/out
-- **Click** - Select stations/systems
+- **WASD** - Move your ship
+- **Left Click (near station)** - Trade cargo at nearest station
+- **Goal** - Reach **2000 credits** by buying low and selling high
 
 ## Build Instructions
 
@@ -45,10 +42,19 @@ dotnet test
 2. Open `client-godot/project.godot` in Godot Editor
 3. Press **F5** to run
 
-### Troubleshooting
+## Play in Browser via GitHub Pages
+
+1. In GitHub, go to **Settings → Pages** and set source to **GitHub Actions**.
+2. Push to `main`.
+3. Wait for **Deploy Godot Web** workflow to finish.
+4. Open the published Pages URL for your repository.
+
+## Troubleshooting
 
 If the project doesn't start, verify in Godot Editor:
 - **Project → Project Settings → Application → Run → Main Scene** = `res://Scenes/Main.tscn`
+
+If Pages does not publish, verify repository permissions allow Actions to deploy Pages artifacts.
 
 ## Content Schema
 
