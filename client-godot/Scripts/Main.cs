@@ -2,6 +2,8 @@ using System;
 using Godot;
 using SimCore.Systems;
 
+#nullable enable
+
 public partial class Main : Node2D
 {
     private sealed class Station
@@ -20,6 +22,7 @@ public partial class Main : Node2D
 
     private readonly Station[] _stations =
     {
+        // Distance is a route-risk/cost factor used by sim-core pricing (not screen-space distance).
         new() { Name = "Atlas Hub", Position = new Vector2(260, 160), BasePrice = 34f, Supply = 50, Demand = 32, Distance = 4f, EventMod = 0.02f },
         new() { Name = "Kepler Dock", Position = new Vector2(610, 220), BasePrice = 39f, Supply = 28, Demand = 55, Distance = 11f, EventMod = 0.08f },
         new() { Name = "Helios Yard", Position = new Vector2(430, 460), BasePrice = 31f, Supply = 65, Demand = 24, Distance = 7f, EventMod = -0.03f },
@@ -174,7 +177,7 @@ public partial class Main : Node2D
         _status = $"Sold {unitsToSell} alloys at {sellPrice} cr each to {target.Name}.";
     }
 
-    private Station FindClosestStation()
+    private Station? FindClosestStation()
     {
         var closestStation = _stations[0];
         var bestDistance = _playerPosition.DistanceTo(closestStation.Position);
@@ -208,3 +211,5 @@ public partial class Main : Node2D
         _statusLabel.Text = _status;
     }
 }
+
+#nullable disable

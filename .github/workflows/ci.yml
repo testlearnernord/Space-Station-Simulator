@@ -22,7 +22,7 @@ jobs:
       run: dotnet restore sim-core.Tests/sim-core.Tests.csproj
 
     - name: Build
-      run: dotnet build sim-core/sim-core.csproj --no-restore
+      run: dotnet build sim-core.Tests/sim-core.Tests.csproj --no-restore
 
     - name: Test
       run: dotnet test sim-core.Tests/sim-core.Tests.csproj --no-build --verbosity normal
