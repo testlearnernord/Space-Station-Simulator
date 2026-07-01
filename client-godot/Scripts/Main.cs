@@ -168,9 +168,9 @@ public partial class Main : Node2D
         _status = $"Sold {unitsToSell} alloys at {sellPrice} cr each to {target.Name}.";
     }
 
-    private Station? FindClosestStation()
+    private Station FindClosestStation()
     {
-        Station? best = null;
+        Station best = null;
         var bestDistance = float.MaxValue;
 
         foreach (var station in _stations)
