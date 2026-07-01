@@ -125,6 +125,12 @@ public partial class Main : Node2D
 
     private void TryTradeAtNearestStation()
     {
+        if (_stations.Length == 0)
+        {
+            _status = "No stations are available in this scenario.";
+            return;
+        }
+
         var target = FindClosestStation();
         if (target is null)
         {
@@ -170,20 +176,21 @@ public partial class Main : Node2D
 
     private Station FindClosestStation()
     {
-        Station best = null;
-        var bestDistance = float.MaxValue;
+        var closestStation = _stations[0];
+        var bestDistance = _playerPosition.DistanceTo(closestStation.Position);
 
-        foreach (var station in _stations)
+        for (var i = 1; i < _stations.Length; i++)
         {
+            var station = _stations[i];
             var distance = _playerPosition.DistanceTo(station.Position);
             if (distance < bestDistance)
             {
                 bestDistance = distance;
-                best = station;
+                closestStation = station;
             }
         }
 
-        return bestDistance <= 85f ? best : null;
+        return bestDistance <= 85f ? closestStation : null;
     }
 
     private float GetBuyPrice(Station station) =>

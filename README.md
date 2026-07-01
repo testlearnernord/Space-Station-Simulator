@@ -45,6 +45,7 @@ dotnet test
 ## Play in Browser via GitHub Pages
 
 1. In GitHub, go to **Settings → Pages** and set source to **GitHub Actions**.
+   - You need repository admin permissions to change this setting.
 2. Push to `main`.
 3. Wait for **Deploy Godot Web** workflow to finish.
 4. Open the published Pages URL for your repository.
