@@ -45,7 +45,7 @@ var status := "Move with WASD. Click near a station to buy/sell alloys."
 
 
 func _ready() -> void:
-	rng.seed = 424242
+	rng.set_seed(424242)
 	update_hud()
 
 
