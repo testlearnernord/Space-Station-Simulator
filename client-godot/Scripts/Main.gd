@@ -22,6 +22,7 @@ class Station:
 const STATION_COLOR := Color(0.3, 0.7, 1.0)
 const PLAYER_COLOR := Color(1.0, 0.85, 0.2)
 const CARGO_CAPACITY := 30
+const SELL_PRICE_RATIO := 0.92
 
 var stations: Array[Station] = [
 	Station.new("Atlas Hub", Vector2(260, 160), 34.0, 50, 32, 4.0, 0.02),
@@ -147,7 +148,7 @@ func try_trade_at_nearest_station() -> void:
 	status = "Sold %d alloys at %d cr each to %s." % [units_to_sell, sell_price, target.name]
 
 
-func find_closest_station() -> Variant:
+func find_closest_station() -> Station:
 	if stations.is_empty():
 		return null
 
@@ -180,7 +181,7 @@ func get_buy_price(station: Station) -> float:
 
 func get_sell_price(station: Station) -> float:
 	var reference := market_price(station.base_price, station.supply, station.demand, station.distance + 2.0, 0.0, station.event_mod)
-	return maxf(1.0, round(reference * 0.92))
+	return maxf(1.0, round(reference * SELL_PRICE_RATIO))
 
 
 func update_hud() -> void:
