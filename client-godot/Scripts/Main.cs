@@ -122,6 +122,25 @@ public partial class Main : Node2D
     private const float EconomyTick = 1f;
     private const float NpcTick = 2.4f;
     private const float SaveTick = 5f;
+    private const int MaxTradeLogEntries = 12;
+    private const int StarfieldStarCount = 95;
+    private const int SeedVarianceMin = -6;
+    private const int SeedVarianceMax = 6;
+    private const int MinInitialStock = 2;
+    private const int MaxInitialStockBonus = 12;
+    private const float NpcMinTradeRatio = 0.35f;
+    private const float NpcMaxTradeRatio = 0.8f;
+    private const float BuyMarkup = 1.06f;
+    private const float SellMarkdown = 0.9f;
+    private const float PressureClampMin = -1.2f;
+    private const float PressureClampMax = 1.2f;
+    private const float PressurePriceFactor = 0.45f;
+    private const float DistancePriceFactor = 0.01f;
+    private const float MinPriceMultiplier = 0.45f;
+    private const float MaxPriceMultiplier = 2.6f;
+    private const float VeryHighDemandRatio = 0.45f;
+    private const float LowStockRatio = 0.8f;
+    private const float OverstockRatio = 1.5f;
 
     private static readonly Color StationColor = new(0.35f, 0.75f, 1f);
     private static readonly Color PlayerColor = new(1f, 0.86f, 0.25f);
@@ -201,6 +220,7 @@ public partial class Main : Node2D
 
     private string _toastText = string.Empty;
     private float _toastTimer;
+    private bool _lastTradeFailed;
 
     private Rect2 _buyRect;
     private Rect2 _sellRect;
@@ -217,6 +237,7 @@ public partial class Main : Node2D
         _rng.Seed = 424242;
         _hudLabel = GetNode<Label>("CanvasLayer/HudLabel");
         _statusLabel = GetNode<Label>("CanvasLayer/StatusLabel");
+        ValidateResourceConfig();
 
         SetupDefaults();
         LoadState();
@@ -375,8 +396,8 @@ public partial class Main : Node2D
             foreach (var resourceId in ResourceIds)
             {
                 var target = station.TargetStock[resourceId];
-                var seed = Math.Clamp(target + _rng.RandiRange(-6, 6), 2, target + 12);
-                AddToInventory(station.Inventory, resourceId, seed);
+                var initialStock = Math.Clamp(target + _rng.RandiRange(SeedVarianceMin, SeedVarianceMax), MinInitialStock, target + MaxInitialStockBonus);
+                AddToInventory(station.Inventory, resourceId, initialStock);
             }
         }
 
@@ -553,14 +574,14 @@ public partial class Main : Node2D
             {
                 foreach (var to in _stations)
                 {
-                    if (ReferenceEquals(from, to)) continue;
+                    if (from.Id == to.Id) continue;
 
                     var unitProfit = GetStationSellPrice(to, resourceId) - GetStationBuyPrice(from, resourceId);
                     if (unitProfit < 2) continue;
 
                     var amount = Math.Min(GetInventoryAmount(from.Inventory, resourceId), npc.CargoCapacity / volume);
                     amount = Math.Min(amount, GetAvailableCapacity(to.Inventory) / volume);
-                    amount = Math.Max(0, (int)Mathf.Round(amount * _rng.RandfRange(0.35f, 0.8f)));
+                    amount = Math.Max(0, (int)Mathf.Round(amount * _rng.RandfRange(NpcMinTradeRatio, NpcMaxTradeRatio)));
                     if (amount <= 0) continue;
 
                     var expected = unitProfit * amount;
@@ -578,13 +599,13 @@ public partial class Main : Node2D
     private int GetStationBuyPrice(Station station, string resourceId)
     {
         var basePrice = CalculateBasePrice(station, resourceId);
-        return (int)MathF.Ceiling(basePrice * 1.06f);
+        return (int)MathF.Ceiling(basePrice * BuyMarkup);
     }
 
     private int GetStationSellPrice(Station station, string resourceId)
     {
         var basePrice = CalculateBasePrice(station, resourceId);
-        return Math.Max(1, (int)MathF.Floor(basePrice * 0.9f));
+        return Math.Max(1, (int)MathF.Floor(basePrice * SellMarkdown));
     }
 
     private float CalculateBasePrice(Station station, string resourceId)
@@ -592,14 +613,14 @@ public partial class Main : Node2D
         var resource = Resources[resourceId];
         var target = Math.Max(1, station.TargetStock[resourceId]);
         var current = GetInventoryAmount(station.Inventory, resourceId);
-        var pressure = Mathf.Clamp((target - current) / (float)target, -1.2f, 1.2f);
+        var pressure = Mathf.Clamp((target - current) / (float)target, PressureClampMin, PressureClampMax);
 
         var tierBonus = 1f + 0.1f * (resource.Tier - 1);
-        var volatility = 1f + pressure * 0.45f + station.EventMod;
-        var distance = 1f + station.Distance * 0.01f;
+        var volatility = 1f + pressure * PressurePriceFactor + station.EventMod;
+        var distance = 1f + station.Distance * DistancePriceFactor;
 
         var raw = resource.BasePrice * tierBonus * volatility * distance;
-        return Mathf.Clamp(raw, resource.BasePrice * 0.45f, resource.BasePrice * 2.6f);
+        return Mathf.Clamp(raw, resource.BasePrice * MinPriceMultiplier, resource.BasePrice * MaxPriceMultiplier);
     }
 
     private string GetStockState(Station station, string resourceId)
@@ -607,9 +628,9 @@ public partial class Main : Node2D
         var target = Math.Max(1, station.TargetStock[resourceId]);
         var ratio = GetInventoryAmount(station.Inventory, resourceId) / (float)target;
 
-        if (ratio < 0.45f) return "Sehr gefragt";
-        if (ratio < 0.8f) return "Knapp";
-        if (ratio > 1.5f) return "Überschuss";
+        if (ratio < VeryHighDemandRatio) return "Sehr gefragt";
+        if (ratio < LowStockRatio) return "Knapp";
+        if (ratio > OverstockRatio) return "Überschuss";
         return "Stabil";
     }
 
@@ -1038,14 +1059,19 @@ public partial class Main : Node2D
     {
         var newAmount = GetInventoryAmount(_playerInventory, resourceId);
         var oldAmount = newAmount - amount;
+        if (newAmount <= 0)
+        {
+            _avgBuyPrice.Remove(resourceId);
+            return;
+        }
         var oldAvg = _avgBuyPrice.TryGetValue(resourceId, out var current) ? current : unitPrice;
-        _avgBuyPrice[resourceId] = ((oldAvg * oldAmount) + amount * unitPrice) / Math.Max(1f, newAmount);
+        _avgBuyPrice[resourceId] = ((oldAvg * oldAmount) + amount * unitPrice) / newAmount;
     }
 
     private void AddTradeLog(string message)
     {
         _tradeLog.Add(message);
-        while (_tradeLog.Count > 12) _tradeLog.RemoveAt(0);
+        while (_tradeLog.Count > MaxTradeLogEntries) _tradeLog.RemoveAt(0);
     }
 
     private string RecentTrades()
@@ -1060,6 +1086,7 @@ public partial class Main : Node2D
         _status = text;
         _toastText = text;
         _toastTimer = 2f;
+        _lastTradeFailed = false;
     }
 
     private void FailTrade(string text)
@@ -1067,12 +1094,14 @@ public partial class Main : Node2D
         _status = text;
         _toastText = text;
         _toastTimer = 2f;
+        _lastTradeFailed = true;
     }
 
     private void UpdateHud()
     {
-        var valuation = _dockingStation ?? _stations.First();
-        _hudLabel.Text = $"Credits: {_credits}   Cargo: {GetUsedCapacity(_playerInventory)}/{_playerInventory.Capacity}   Stationen: {_stations.Count}   Schiffswert: {GetInventoryValue(_playerInventory, valuation, false)}   Ziel: 2000";
+        var valuation = _dockingStation ?? _stations.FirstOrDefault();
+        var shipValue = valuation is null ? 0 : GetInventoryValue(_playerInventory, valuation, false);
+        _hudLabel.Text = $"Credits: {_credits}   Cargo: {GetUsedCapacity(_playerInventory)}/{_playerInventory.Capacity}   Stationen: {_stations.Count}   Schiffswert: {shipValue}   Ziel: 2000";
 
         var dockText = _isDocked && _dockingStation is not null
             ? $"Docked at {_dockingStation.Name}"
@@ -1080,9 +1109,7 @@ public partial class Main : Node2D
                 ? $"Docking {(int)Mathf.Round(100f * _dockingProgress / DockHoldTime)}%"
                 : "Undocked");
 
-        _statusLabel.Modulate = _status.Contains("nicht", StringComparison.OrdinalIgnoreCase) || _status.Contains("voll", StringComparison.OrdinalIgnoreCase)
-            ? BadColor
-            : Color.Color8(255, 255, 255);
+        _statusLabel.Modulate = _lastTradeFailed ? BadColor : Color.Color8(255, 255, 255);
 
         _statusLabel.Text = $"{dockText} | {_status}";
     }
@@ -1122,7 +1149,7 @@ public partial class Main : Node2D
     {
         _stars.Clear();
         var size = GetViewportRect().Size;
-        for (var i = 0; i < 95; i++)
+        for (var i = 0; i < StarfieldStarCount; i++)
         {
             _stars.Add(new Dictionary<string, Variant>
             {
@@ -1223,7 +1250,7 @@ public partial class Main : Node2D
             }
 
             _tradeLog.Clear();
-            _tradeLog.AddRange(data.TradeLog.Take(12));
+            _tradeLog.AddRange(data.TradeLog.Take(MaxTradeLogEntries));
             _goalReached = data.GoalReached;
             _hasOwnStation = data.HasOwnStation;
             _selectedResourceId = string.IsNullOrWhiteSpace(data.SelectedResource) ? DefaultResourceId : data.SelectedResource;
@@ -1252,6 +1279,15 @@ public partial class Main : Node2D
         {
             if (!source.Stacks.TryGetValue(resourceId, out var amount) || amount <= 0) continue;
             target.Stacks[resourceId] = amount;
+        }
+    }
+
+    private static void ValidateResourceConfig()
+    {
+        foreach (var pair in Resources)
+        {
+            if (pair.Key == pair.Value.Id) continue;
+            GD.PushWarning($"Resource key '{pair.Key}' does not match id '{pair.Value.Id}'.");
         }
     }
 }
