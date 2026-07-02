@@ -39,6 +39,16 @@ jobs:
         mkdir -p exports/web
         godot --headless --export-release "Web" exports/web/index.html
 
+    - name: Patch web export for GitHub Pages
+      run: |
+        # Download coi-serviceworker so GitHub Pages can serve the game without
+        # requiring COOP/COEP headers (needed for SharedArrayBuffer / WebAssembly threads)
+        curl -sSL "https://cdn.jsdelivr.net/npm/coi-serviceworker@0.1.7/coi-serviceworker.min.js" \
+          -o client-godot/exports/web/coi-serviceworker.js
+        # Inject the service-worker script before the Godot engine loader
+        sed -i 's|<script src="index.js"></script>|<script src="coi-serviceworker.js"></script>\n\t\t<script src="index.js"></script>|' \
+          client-godot/exports/web/index.html
+
     - name: Upload Pages artifact
       uses: actions/upload-pages-artifact@v3
       with:
