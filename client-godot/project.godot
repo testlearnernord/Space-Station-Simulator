@@ -2,11 +2,7 @@
 
 config/name="Space Station Simulator"
 run/main_scene="res://Scenes/Main.tscn"
-config/features=PackedStringArray("4.3", "C#", "Forward Plus")
-
-[dotnet]
-
-project/assembly_name="SpaceStationSimulator"
+config/features=PackedStringArray("4.3", "Forward Plus")
 
 [input]
 
