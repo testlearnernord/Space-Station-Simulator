@@ -207,7 +207,7 @@ func handle_movement(delta: float, boost_active: bool) -> void:
     if input_dir != Vector2.ZERO:
         input_dir = input_dir.normalized()
         player_velocity += input_dir * ACCELERATION * (BOOST_MULTIPLIER if boost_active else 1.0) * delta
-        if engine_sound_cooldown <= 0.0:
+        if engine_sound_cooldown <= 0.0 and not engine_player.playing:
             engine_player.play()
             engine_sound_cooldown = 0.14
     else:
@@ -247,6 +247,7 @@ func update_docking(delta: float) -> void:
 
     if not was_dock_held:
         dock_start_player.play()
+        was_dock_held = true
 
     if docking_station != candidate:
         docking_station = candidate
@@ -430,7 +431,7 @@ func get_sell_price(station: Station) -> float:
 
 func update_hud() -> void:
     var dock_text := "Docked" if is_docked else "Undocked"
-    if docking_station != null and not is_docked and Input.is_key_pressed(KEY_C):
+    if docking_station != null and not is_docked and docking_progress > 0.0 and Input.is_key_pressed(KEY_C):
         dock_text = "Docking %d%%" % int(round(100.0 * docking_progress / DOCK_HOLD_TIME))
     hud_label.text = "Credits: %d   Cargo: %d/%d   %s   Boost: Shift" % [credits, cargo, CARGO_CAPACITY, dock_text]
     status_label.text = status
