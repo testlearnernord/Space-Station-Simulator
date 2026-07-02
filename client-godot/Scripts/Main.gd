@@ -38,10 +38,10 @@ const ALIEN_SYL_A := ["Xel", "Vra", "Qin", "Zho", "Taa", "Myr", "Kri", "Uul", "S
 const ALIEN_SYL_B := ["'ra", "uun", "eth", "ix", "oq", "iri", "aal", "zen", "tor", "aak"]
 
 var stations: Array[Station] = [
-    Station.new("Atlas Hub", Vector2(260, 160), 34.0, 50, 32, 4.0, 0.02),
-    Station.new("Kepler Dock", Vector2(610, 220), 39.0, 28, 55, 11.0, 0.08),
-    Station.new("Helios Yard", Vector2(430, 460), 31.0, 65, 24, 7.0, -0.03),
-    Station.new("Nova Ring", Vector2(760, 420), 45.0, 20, 60, 15.0, 0.12)
+    Station.new("", Vector2(260, 160), 34.0, 50, 32, 4.0, 0.02),
+    Station.new("", Vector2(610, 220), 39.0, 28, 55, 11.0, 0.08),
+    Station.new("", Vector2(430, 460), 31.0, 65, 24, 7.0, -0.03),
+    Station.new("", Vector2(760, 420), 45.0, 20, 60, 15.0, 0.12)
 ]
 
 var rng := RandomNumberGenerator.new()
