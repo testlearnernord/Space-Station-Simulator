@@ -105,13 +105,13 @@ func _process(delta: float) -> void:
         economy_accumulator = 0.0
         tick_economy()
 
-    if credits >= 2600 and not has_own_station:
-        has_own_station = true
-        status = "You founded your own station network!"
-
     if credits >= 2000 and not has_own_station and not goal_reached_announced:
         goal_reached_announced = true
         status = "Goal reached! Keep trading, or build your own station at 2600 credits."
+
+    if credits >= 2600 and not has_own_station:
+        has_own_station = true
+        status = "You founded your own station network!"
 
     update_hud()
     queue_redraw()
@@ -353,9 +353,10 @@ func generate_random_station_name() -> String:
 
 func generate_starfield() -> void:
     stars.clear()
+    var viewport_size := get_viewport_rect().size
     for _i in range(95):
         stars.append({
-            "pos": Vector2(rng.randf_range(0.0, 1024.0), rng.randf_range(0.0, 600.0)),
+            "pos": Vector2(rng.randf_range(0.0, viewport_size.x), rng.randf_range(0.0, viewport_size.y)),
             "size": rng.randf_range(0.7, 2.2),
             "phase": rng.randf_range(0.0, TAU),
             "speed": rng.randf_range(0.8, 2.2),
@@ -398,7 +399,7 @@ func create_tone_stream(duration: float, freq_start: float, freq_end: float, amp
         phase += TAU * freq / float(sample_rate)
         var envelope := pow(1.0 - t, 1.4)
         var sample_value := sin(phase) * amplitude * envelope
-        data.encode_s16(i * 2, int(clampi(int(sample_value * 32767.0), -32767, 32767)))
+        data.encode_s16(i * 2, int(clampf(sample_value * 32767.0, -32767.0, 32767.0)))
 
     var stream := AudioStreamWAV.new()
     stream.format = AudioStreamWAV.FORMAT_16_BITS
