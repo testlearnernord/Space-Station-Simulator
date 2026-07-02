@@ -6,7 +6,7 @@ Single-player space-station management simulator with economic simulation, trade
 
 - `/sim-core/` - .NET 8 simulation kernel (pure logic, no UI dependencies)
 - `/sim-core.Tests/` - xUnit tests for pricing, pathing, AI, save/load
-- `/client-godot/` - Godot 4 C# client (top-down views, UI)
+- `/client-godot/` - Godot 4 client (top-down views, UI, web export)
 - `/content/` - JSON data files (commodities, factions, systems, stations)
 - `/.github/workflows/` - CI pipelines (build, test, web deploy)
 
@@ -38,7 +38,7 @@ dotnet test
 
 ## Run Locally
 
-1. Install **Godot 4.x .NET** (version 4.3 or higher)
+1. Install **Godot 4.x** (version 4.3 or higher)
 2. Open `client-godot/project.godot` in Godot Editor
 3. Press **F5** to run
 

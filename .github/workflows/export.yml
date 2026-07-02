@@ -25,7 +25,8 @@ jobs:
       uses: chickensoft-games/setup-godot@v1
       with:
         version: 4.3.0
-        use-dotnet: true
+        use-dotnet: false
+        include-templates: true
 
     - name: Verify Project
       run: |
