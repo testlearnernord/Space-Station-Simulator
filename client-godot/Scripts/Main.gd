@@ -31,6 +31,7 @@ const BASE_MAX_SPEED := 250.0
 const BOOST_MULTIPLIER := 1.75
 const DOCK_RANGE := 150.0
 const DOCK_HOLD_TIME := 1.2
+const BOUNDARY_PADDING := 24.0
 
 const HUMAN_FIRST := ["Nova", "Aurora", "Helios", "Kepler", "Atlas", "Vanguard", "Orion", "Argent", "Sol", "Pioneer"]
 const HUMAN_LAST := ["Bastion", "Reach", "Harbor", "Ring", "Terminal", "Spire", "Yard", "Dock", "Station", "Port"]
@@ -38,10 +39,10 @@ const ALIEN_SYL_A := ["Xel", "Vra", "Qin", "Zho", "Taa", "Myr", "Kri", "Uul", "S
 const ALIEN_SYL_B := ["'ra", "uun", "eth", "ix", "oq", "iri", "aal", "zen", "tor", "aak"]
 
 var stations: Array[Station] = [
-    Station.new("", Vector2(260, 160), 34.0, 50, 32, 4.0, 0.02),
-    Station.new("", Vector2(610, 220), 39.0, 28, 55, 11.0, 0.08),
-    Station.new("", Vector2(430, 460), 31.0, 65, 24, 7.0, -0.03),
-    Station.new("", Vector2(760, 420), 45.0, 20, 60, 15.0, 0.12)
+    Station.new("Station A", Vector2(260, 160), 34.0, 50, 32, 4.0, 0.02),
+    Station.new("Station B", Vector2(610, 220), 39.0, 28, 55, 11.0, 0.08),
+    Station.new("Station C", Vector2(430, 460), 31.0, 65, 24, 7.0, -0.03),
+    Station.new("Station D", Vector2(760, 420), 45.0, 20, 60, 15.0, 0.12)
 ]
 
 var rng := RandomNumberGenerator.new()
@@ -225,7 +226,7 @@ func handle_movement(delta: float, boost_active: bool) -> void:
 
     var viewport_size := get_viewport_rect().size
     player_position += player_velocity * delta
-    player_position = player_position.clamp(Vector2(24, 24), viewport_size - Vector2(24, 24))
+    player_position = player_position.clamp(Vector2(BOUNDARY_PADDING, BOUNDARY_PADDING), viewport_size - Vector2(BOUNDARY_PADDING, BOUNDARY_PADDING))
 
 
 func update_docking(delta: float) -> void:
@@ -337,13 +338,13 @@ func tick_economy() -> void:
 
 
 func generate_station_names() -> void:
-    var used := {}
+    var used_names := {}
     for station in stations:
         var generated := ""
-        while generated == "" or used.has(generated):
+        while generated == "" or used_names.has(generated):
             generated = generate_random_station_name()
         station.name = generated
-        used[generated] = true
+        used_names[generated] = true
 
 
 func generate_random_station_name() -> String:
@@ -389,7 +390,7 @@ func setup_audio() -> void:
 
 func create_tone_stream(duration: float, freq_start: float, freq_end: float, amplitude: float) -> AudioStreamWAV:
     var sample_rate := 44100
-    var sample_count := maxi(1, int(duration * sample_rate))
+    var sample_count := maxi(2, int(duration * sample_rate))
     var data := PackedByteArray()
     data.resize(sample_count * 2)
     var phase := 0.0
