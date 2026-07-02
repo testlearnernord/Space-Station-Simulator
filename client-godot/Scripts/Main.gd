@@ -147,7 +147,10 @@ func try_trade_at_nearest_station() -> void:
 	status = "Sold %d alloys at %d cr each to %s." % [units_to_sell, sell_price, target.name]
 
 
-func find_closest_station():
+func find_closest_station() -> Variant:
+	if stations.is_empty():
+		return null
+
 	var closest_station := stations[0]
 	var best_distance := player_position.distance_to(closest_station.position)
 
