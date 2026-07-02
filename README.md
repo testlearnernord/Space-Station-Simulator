@@ -20,8 +20,10 @@ Single-player space-station management simulator with economic simulation, trade
 
 ## Controls
 
-- **WASD** - Move your ship
-- **Left Click (near station)** - Trade cargo at nearest station
+- **WASD** - Fly your ship with inertia
+- **Shift (hold)** - Boost thrusters
+- **C (hold near station)** - Magnetic docking sequence with auto-alignment
+- **Left Click (while docked)** - Trade cargo at your docked station
 - **Goal** - Reach **2000 credits** by buying low and selling high
 
 ## Build Instructions

@@ -19,4 +19,4 @@ offset_left = 14.0
 offset_top = 40.0
 offset_right = 930.0
 offset_bottom = 72.0
-text = "Move with WASD. Click near a station to buy/sell alloys."
+text = "Fly with WASD, hold C near station to dock, click to trade while docked."
