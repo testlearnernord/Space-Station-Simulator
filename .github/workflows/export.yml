@@ -6,16 +6,14 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
 concurrency:
   group: pages
   cancel-in-progress: true
 
 jobs:
-  build:
+  build-and-deploy:
     runs-on: ubuntu-latest
 
     steps:
@@ -49,19 +47,8 @@ jobs:
         sed -i 's|<script src="index.js"></script>|<script src="coi-serviceworker.js"></script>\n\t\t<script src="index.js"></script>|' \
           client-godot/exports/web/index.html
 
-    - name: Upload Pages artifact
-      uses: actions/upload-pages-artifact@v3
-      with:
-        path: client-godot/exports/web
-
-  deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
-    needs: build
-
-    steps:
     - name: Deploy to GitHub Pages
-      id: deployment
-      uses: actions/deploy-pages@v4
+      uses: JamesIves/github-pages-deploy-action@v4
+      with:
+        folder: client-godot/exports/web
+        branch: gh-pages
