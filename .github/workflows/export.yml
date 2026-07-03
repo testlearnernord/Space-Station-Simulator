@@ -66,6 +66,7 @@ jobs:
       run: |
         set -euo pipefail
 
+        workspace_dir="${GITHUB_WORKSPACE}"
         git config user.name "github-actions[bot]"
         git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
@@ -85,7 +86,7 @@ jobs:
           }
         done < <(find /tmp/gh-pages -mindepth 1 -maxdepth 1 ! -name ".git" -print)
 
-        cp -R client-godot/exports/web/. /tmp/gh-pages/
+        cp -R "${workspace_dir}/client-godot/exports/web/." /tmp/gh-pages/
         touch /tmp/gh-pages/.nojekyll
 
         cd /tmp/gh-pages
