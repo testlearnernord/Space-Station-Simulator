@@ -50,6 +50,22 @@ const TIER_BORDER_COLOR := {
 	2: Color(0.35, 0.95, 0.45)
 }
 
+const DEFAULT_RNG_SEED := 424242
+const NPC_MARKER_COLOR := Color(0.72, 0.95, 0.45, 0.92)
+const ROW_SELECTED_BG := Color(0.16, 0.24, 0.35, 0.96)
+const ROW_DEFAULT_BG := Color(0.12, 0.17, 0.26, 0.9)
+const ROW_DEFAULT_BORDER := Color(0.2, 0.35, 0.55, 0.7)
+const ICON_BG_COLOR := Color(0.06, 0.08, 0.13)
+const CONTROL_BG_COLOR := Color(0.1, 0.18, 0.3, 0.8)
+const STOCK_STATE_COLOR := Color(0.65, 0.94, 1.0)
+const STOCK_STATE_OFFSET := 105.0
+const TRADE_LOG_COLOR := Color(0.72, 0.88, 1.0)
+const BUY_BUTTON_COLOR := Color(0.18, 0.42, 0.2, 0.95)
+const SELL_BUTTON_COLOR := Color(0.17, 0.28, 0.48, 0.95)
+const UI_BUTTON_BG := Color(0.14, 0.26, 0.4, 0.88)
+const TOAST_BG_COLOR := Color(0.05, 0.1, 0.2, 0.92)
+const TOAST_BORDER_COLOR := Color(0.5, 0.9, 1.0, 0.85)
+
 # Resource definitions: id -> {id, display_name, tier, category, icon, base_price, volume_per_unit, description}
 const RESOURCES := {
 	"wood": {
@@ -157,7 +173,7 @@ var engine_sound_cooldown := 0.0
 # ─── Lifecycle ────────────────────────────────────────────────────────────────
 
 func _ready() -> void:
-	rng.seed = 424242
+	rng.seed = DEFAULT_RNG_SEED
 	setup_defaults()
 	load_state()
 	generate_starfield()
@@ -590,7 +606,7 @@ func draw_npc_markers() -> void:
 	for i in range(npcs.size()):
 		var anchor: Dictionary = stations[i % stations.size()]
 		var marker_pos: Vector2 = anchor["position"] + Vector2(28.0 + 9.0 * i, -24.0 - 5.0 * i)
-		draw_circle(marker_pos, 4.0, Color(0.72, 0.95, 0.45, 0.92))
+		draw_circle(marker_pos, 4.0, NPC_MARKER_COLOR)
 		draw_string(ThemeDB.fallback_font, marker_pos + Vector2(8.0, 4.0), npcs[i]["name"], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 10)
 
 
@@ -646,8 +662,8 @@ func draw_player_panel(rect: Rect2, station: Dictionary) -> void:
 
 	sort_rect = Rect2(rect.position + Vector2(10.0, 114.0), Vector2(rect.size.x * 0.58, 22.0))
 	dir_rect = Rect2(rect.position + Vector2(14.0 + rect.size.x * 0.58, 114.0), Vector2(rect.size.x * 0.34 - 20.0, 22.0))
-	draw_rect(sort_rect, Color(0.1, 0.18, 0.3, 0.8), true)
-	draw_rect(dir_rect, Color(0.1, 0.18, 0.3, 0.8), true)
+	draw_rect(sort_rect, CONTROL_BG_COLOR, true)
+	draw_rect(dir_rect, CONTROL_BG_COLOR, true)
 	draw_string(ThemeDB.fallback_font, sort_rect.position + Vector2(6.0, 15.0), "Sort: %s" % sort_label(sort_key), HORIZONTAL_ALIGNMENT_LEFT, -1.0, 12)
 	draw_string(ThemeDB.fallback_font, dir_rect.position + Vector2(6.0, 15.0), "Dir: %s" % ("Auf" if sort_ascending else "Ab"), HORIZONTAL_ALIGNMENT_LEFT, -1.0, 12)
 
@@ -683,11 +699,11 @@ func draw_row(row: Dictionary, rect: Rect2, station_row: bool, station: Dictiona
 	var res: Dictionary = RESOURCES[row["resource_id"]]
 	var selected := selected_resource_id == row["resource_id"]
 
-	draw_rect(rect, Color(0.16, 0.24, 0.35, 0.96) if selected else Color(0.12, 0.17, 0.26, 0.9), true)
-	draw_rect(rect, PANEL_BORDER if selected else Color(0.2, 0.35, 0.55, 0.7), false, 1.0)
+	draw_rect(rect, ROW_SELECTED_BG if selected else ROW_DEFAULT_BG, true)
+	draw_rect(rect, PANEL_BORDER if selected else ROW_DEFAULT_BORDER, false, 1.0)
 
 	var icon_rect := Rect2(rect.position + Vector2(3.0, 2.0), Vector2(20.0, 20.0))
-	draw_rect(icon_rect, Color(0.06, 0.08, 0.13), true)
+	draw_rect(icon_rect, ICON_BG_COLOR, true)
 	draw_rect(icon_rect, TIER_BORDER_COLOR[res["tier"]], false, 2.0)
 	draw_string(ThemeDB.fallback_font, icon_rect.position + Vector2(4.0, 15.0), res["icon"], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 12)
 
@@ -695,7 +711,7 @@ func draw_row(row: Dictionary, rect: Rect2, station_row: bool, station: Dictiona
 	draw_string(ThemeDB.fallback_font, rect.position + Vector2(28.0, 23.0), "Menge:%d Wert:%d Vol:%d" % [row["amount"], row["total_value"], row["total_volume"]], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 10)
 
 	if station_row:
-		draw_string(ThemeDB.fallback_font, rect.position + Vector2(rect.size.x - 105.0, 14.0), get_stock_state(station, row["resource_id"]), HORIZONTAL_ALIGNMENT_LEFT, -1.0, 10, Color(0.65, 0.94, 1.0))
+		draw_string(ThemeDB.fallback_font, rect.position + Vector2(rect.size.x - STOCK_STATE_OFFSET, 14.0), get_stock_state(station, row["resource_id"]), HORIZONTAL_ALIGNMENT_LEFT, -1.0, 10, STOCK_STATE_COLOR)
 
 	resource_hit_rects.append({"rect": rect, "resource_id": row["resource_id"]})
 
@@ -727,8 +743,8 @@ func draw_trade_panel(rect: Rect2, station: Dictionary) -> void:
 	buy_rect = Rect2(rect.position + Vector2(12.0, 188.0), Vector2(rect.size.x - 24.0, 34.0))
 	sell_rect = Rect2(rect.position + Vector2(12.0, 228.0), Vector2(rect.size.x - 24.0, 34.0))
 
-	draw_rect(buy_rect, Color(0.18, 0.42, 0.2, 0.95), true)
-	draw_rect(sell_rect, Color(0.17, 0.28, 0.48, 0.95), true)
+	draw_rect(buy_rect, BUY_BUTTON_COLOR, true)
+	draw_rect(sell_rect, SELL_BUTTON_COLOR, true)
 	draw_string(ThemeDB.fallback_font, buy_rect.position + Vector2(10.0, 22.0), "Kaufen", HORIZONTAL_ALIGNMENT_LEFT, -1.0, 16)
 	draw_string(ThemeDB.fallback_font, sell_rect.position + Vector2(10.0, 22.0), "Verkaufen", HORIZONTAL_ALIGNMENT_LEFT, -1.0, 16)
 
@@ -736,11 +752,11 @@ func draw_trade_panel(rect: Rect2, station: Dictionary) -> void:
 	draw_string(ThemeDB.fallback_font, rect.position + Vector2(12.0, 280.0), "Credits: %d" % credits, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 12, CREDIT_COLOR)
 	draw_string(ThemeDB.fallback_font, rect.position + Vector2(12.0, 298.0), "Cargo frei / benötigt: %d / %d" % [get_available_capacity(player_inventory), needed_cargo], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 12)
 	draw_string(ThemeDB.fallback_font, rect.position + Vector2(12.0, 318.0), "Letzte Trades:", HORIZONTAL_ALIGNMENT_LEFT, -1.0, 11)
-	draw_string(ThemeDB.fallback_font, rect.position + Vector2(90.0, 318.0), recent_trades(), HORIZONTAL_ALIGNMENT_LEFT, -1.0, 11, Color(0.72, 0.88, 1.0))
+	draw_string(ThemeDB.fallback_font, rect.position + Vector2(90.0, 318.0), recent_trades(), HORIZONTAL_ALIGNMENT_LEFT, -1.0, 11, TRADE_LOG_COLOR)
 
 
 func draw_button(rect: Rect2, text: String) -> void:
-	draw_rect(rect, Color(0.14, 0.26, 0.4, 0.88), true)
+	draw_rect(rect, UI_BUTTON_BG, true)
 	draw_rect(rect, PANEL_BORDER, false, 1.0)
 	draw_string(ThemeDB.fallback_font, rect.position + Vector2(7.0, 16.0), text, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 12)
 
@@ -748,8 +764,8 @@ func draw_button(rect: Rect2, text: String) -> void:
 func draw_toast() -> void:
 	var size := get_viewport_rect().size
 	var rect := Rect2(Vector2(size.x * 0.5 - 120.0, 22.0), Vector2(240.0, 30.0))
-	draw_rect(rect, Color(0.05, 0.1, 0.2, 0.92), true)
-	draw_rect(rect, Color(0.5, 0.9, 1.0, 0.85), false, 1.0)
+	draw_rect(rect, TOAST_BG_COLOR, true)
+	draw_rect(rect, TOAST_BORDER_COLOR, false, 1.0)
 	draw_string(ThemeDB.fallback_font, rect.position + Vector2(10.0, 20.0), toast_text, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 13)
 
 # ─── Inventory ────────────────────────────────────────────────────────────────
