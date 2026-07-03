@@ -90,7 +90,7 @@ jobs:
           echo "gh-pages is already up to date."
         else
           git commit -m "Deploy GitHub Pages from ${GITHUB_SHA}"
-          git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:gh-pages --force
+          git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:gh-pages
         fi
 
     - name: Deploy to GitHub Pages
