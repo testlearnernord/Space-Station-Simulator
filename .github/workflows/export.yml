@@ -63,8 +63,6 @@ jobs:
         path: client-godot/exports/web
 
     - name: Sync gh-pages branch
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         set -euo pipefail
 
@@ -80,6 +78,12 @@ jobs:
         fi
 
         find /tmp/gh-pages -mindepth 1 -maxdepth 1 ! -name ".git" -exec rm -rf {} +
+        remaining="$(find /tmp/gh-pages -mindepth 1 -maxdepth 1 ! -name ".git" -print -quit)"
+        if [ -n "${remaining}" ]; then
+          echo "Failed to clean gh-pages worktree: ${remaining}" >&2
+          exit 1
+        fi
+
         cp -R client-godot/exports/web/. /tmp/gh-pages/
         touch /tmp/gh-pages/.nojekyll
 
@@ -90,7 +94,7 @@ jobs:
           echo "gh-pages is already up to date."
         else
           git commit -m "Deploy GitHub Pages from ${GITHUB_SHA}"
-          git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:gh-pages
+          git push origin HEAD:gh-pages
         fi
 
     - name: Deploy to GitHub Pages
