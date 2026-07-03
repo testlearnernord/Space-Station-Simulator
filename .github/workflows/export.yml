@@ -67,29 +67,30 @@ jobs:
         set -euo pipefail
 
         workspace_dir="${GITHUB_WORKSPACE}"
+        worktree_dir="$(mktemp -d)"
         git config user.name "github-actions[bot]"
         git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
         # gh-pages may not exist yet on the first deployment, so fetch failure is expected then.
         if git fetch origin gh-pages:refs/remotes/origin/gh-pages; then
-          git worktree add /tmp/gh-pages origin/gh-pages
+          git worktree add "${worktree_dir}" origin/gh-pages
         else
-          git worktree add /tmp/gh-pages HEAD
-          cd /tmp/gh-pages
+          git worktree add "${worktree_dir}" HEAD
+          cd "${worktree_dir}"
           git checkout --orphan gh-pages
         fi
 
         while IFS= read -r path; do
           rm -rf "${path}" || {
-            echo "Failed to remove ${path} from gh-pages worktree." >&2
+            echo "Failed to remove ${path} from gh-pages worktree. Check file permissions and worktree state." >&2
             exit 1
           }
-        done < <(find /tmp/gh-pages -mindepth 1 -maxdepth 1 ! -name ".git" -print)
+        done < <(find "${worktree_dir}" -mindepth 1 -maxdepth 1 ! -name ".git" -print)
 
-        cp -R "${workspace_dir}/client-godot/exports/web/." /tmp/gh-pages/
-        touch /tmp/gh-pages/.nojekyll
+        cp -R "${workspace_dir}/client-godot/exports/web/." "${worktree_dir}/"
+        touch "${worktree_dir}/.nojekyll"
 
-        cd /tmp/gh-pages
+        cd "${worktree_dir}"
         git add --all
 
         if git diff --cached --quiet; then
