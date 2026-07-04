@@ -696,8 +696,9 @@ func draw_station_panel(rect: Rect2, station: Dictionary) -> void:
 
 
 func draw_row(row: Dictionary, rect: Rect2, station_row: bool, station: Dictionary) -> void:
-	var res: Dictionary = RESOURCES[row["resource_id"]]
-	var selected: bool = selected_resource_id == str(row["resource_id"])
+	var resource_id: String = str(row["resource_id"])
+	var res: Dictionary = RESOURCES[resource_id]
+	var selected: bool = selected_resource_id == resource_id
 
 	draw_rect(rect, ROW_SELECTED_BG if selected else ROW_DEFAULT_BG, true)
 	draw_rect(rect, PANEL_BORDER if selected else ROW_DEFAULT_BORDER, false, 1.0)
@@ -711,9 +712,9 @@ func draw_row(row: Dictionary, rect: Rect2, station_row: bool, station: Dictiona
 	draw_string(ThemeDB.fallback_font, rect.position + Vector2(28.0, 23.0), "Menge:%d Wert:%d Vol:%d" % [row["amount"], row["total_value"], row["total_volume"]], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 10)
 
 	if station_row:
-		draw_string(ThemeDB.fallback_font, rect.position + Vector2(rect.size.x - STOCK_STATE_OFFSET, 14.0), get_stock_state(station, row["resource_id"]), HORIZONTAL_ALIGNMENT_LEFT, -1.0, 10, STOCK_STATE_COLOR)
+		draw_string(ThemeDB.fallback_font, rect.position + Vector2(rect.size.x - STOCK_STATE_OFFSET, 14.0), get_stock_state(station, resource_id), HORIZONTAL_ALIGNMENT_LEFT, -1.0, 10, STOCK_STATE_COLOR)
 
-	resource_hit_rects.append({"rect": rect, "resource_id": row["resource_id"]})
+	resource_hit_rects.append({"rect": rect, "resource_id": resource_id})
 
 
 func draw_trade_panel(rect: Rect2, station: Dictionary) -> void:
