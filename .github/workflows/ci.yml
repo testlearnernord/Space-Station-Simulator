@@ -7,6 +7,24 @@ on:
     branches: [ main ]
 
 jobs:
+  gdscript-check:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Godot
+      uses: chickensoft-games/setup-godot@v1
+      with:
+        version: 4.3.0
+        use-dotnet: false
+        include-templates: false
+
+    - name: Validate GDScript
+      run: |
+        cd client-godot
+        godot --headless --check-only --quit
+
   test:
     runs-on: ubuntu-latest
 
