@@ -497,9 +497,9 @@ func calculate_base_price(station: Dictionary, resource_id: String) -> float:
 	var target: int = maxi(1, station["target_stock"][resource_id])
 	var current: int = get_inventory_amount(station["inventory"], resource_id)
 	var pressure: float = clampf(float(target - current) / float(target), PRESSURE_CLAMP_MIN, PRESSURE_CLAMP_MAX)
-	var tier_bonus := 1.0 + 0.1 * (res["tier"] - 1)
-	var volatility := 1.0 + pressure * PRESSURE_PRICE_FACTOR + station["event_mod"]
-	var distance_factor := 1.0 + station["distance"] * DISTANCE_PRICE_FACTOR
+	var tier_bonus: float = 1.0 + 0.1 * (float(res["tier"]) - 1.0)
+	var volatility: float = 1.0 + pressure * PRESSURE_PRICE_FACTOR + float(station["event_mod"])
+	var distance_factor: float = 1.0 + float(station["distance"]) * DISTANCE_PRICE_FACTOR
 	var raw: float = res["base_price"] * tier_bonus * volatility * distance_factor
 	return clampf(raw, res["base_price"] * MIN_PRICE_MULTIPLIER, res["base_price"] * MAX_PRICE_MULTIPLIER)
 
@@ -697,7 +697,7 @@ func draw_station_panel(rect: Rect2, station: Dictionary) -> void:
 
 func draw_row(row: Dictionary, rect: Rect2, station_row: bool, station: Dictionary) -> void:
 	var res: Dictionary = RESOURCES[row["resource_id"]]
-	var selected := selected_resource_id == row["resource_id"]
+	var selected: bool = selected_resource_id == str(row["resource_id"])
 
 	draw_rect(rect, ROW_SELECTED_BG if selected else ROW_DEFAULT_BG, true)
 	draw_rect(rect, PANEL_BORDER if selected else ROW_DEFAULT_BORDER, false, 1.0)
@@ -748,7 +748,7 @@ func draw_trade_panel(rect: Rect2, station: Dictionary) -> void:
 	draw_string(ThemeDB.fallback_font, buy_rect.position + Vector2(10.0, 22.0), "Kaufen", HORIZONTAL_ALIGNMENT_LEFT, -1.0, 16)
 	draw_string(ThemeDB.fallback_font, sell_rect.position + Vector2(10.0, 22.0), "Verkaufen", HORIZONTAL_ALIGNMENT_LEFT, -1.0, 16)
 
-	var needed_cargo := quantity * res["volume_per_unit"]
+	var needed_cargo: int = quantity * int(res["volume_per_unit"])
 	draw_string(ThemeDB.fallback_font, rect.position + Vector2(12.0, 280.0), "Credits: %d" % credits, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 12, CREDIT_COLOR)
 	draw_string(ThemeDB.fallback_font, rect.position + Vector2(12.0, 298.0), "Cargo frei / benötigt: %d / %d" % [get_available_capacity(player_inventory), needed_cargo], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 12)
 	draw_string(ThemeDB.fallback_font, rect.position + Vector2(12.0, 318.0), "Letzte Trades:", HORIZONTAL_ALIGNMENT_LEFT, -1.0, 11)
@@ -813,7 +813,7 @@ func get_available_capacity(inventory: Dictionary) -> int:
 
 
 func trim_inventory_to_capacity(inventory: Dictionary) -> void:
-	var over := get_used_capacity(inventory) - inventory["capacity"]
+	var over: int = get_used_capacity(inventory) - int(inventory["capacity"])
 	if over <= 0:
 		return
 	for resource_id in RESOURCE_IDS:
