@@ -748,8 +748,8 @@ func draw_row(row: Dictionary, rect: Rect2, station_row: bool, station: Dictiona
 	var resource_id: String = str(row["resource_id"])
 	var res: Dictionary = RESOURCES[resource_id]
 	var selected: bool = selected_resource_id == resource_id
-	var control_id := "resource:%s" % resource_id
-	var bg_color := ROW_SELECTED_BG if selected else ROW_DEFAULT_BG
+	var control_id: String = "resource:%s" % resource_id
+	var bg_color: Color = ROW_SELECTED_BG if selected else ROW_DEFAULT_BG
 	if is_control_hovered(control_id):
 		bg_color = ROW_HOVER_BG if not selected else ROW_SELECTED_BG.lightened(0.12)
 	if is_control_active(control_id):
@@ -831,7 +831,7 @@ func draw_toast() -> void:
 
 
 func draw_resource_icon(icon_rect: Rect2, resource_id: String) -> void:
-	var center := icon_rect.get_center()
+	var center: Vector2 = icon_rect.get_center()
 	match resource_id:
 		"wood":
 			var top_plank := Rect2(icon_rect.position + Vector2(4.0, 5.0), Vector2(12.0, 4.0))
@@ -871,7 +871,7 @@ func register_control_rect(control_id: String, rect: Rect2) -> void:
 func get_control_id_at(pos: Vector2) -> String:
 	for i in range(control_hit_rects.size() - 1, -1, -1):
 		var hit: Dictionary = control_hit_rects[i]
-		var hit_rect: Rect2 = hit["rect"]
+		var hit_rect: Rect2 = Rect2(hit["rect"])
 		if hit_rect.has_point(pos):
 			return str(hit["id"])
 	return ""
