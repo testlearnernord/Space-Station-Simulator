@@ -54,6 +54,8 @@ const DEFAULT_RNG_SEED := 424242
 const NPC_MARKER_COLOR := Color(0.72, 0.95, 0.45, 0.92)
 const ROW_SELECTED_BG := Color(0.16, 0.24, 0.35, 0.96)
 const ROW_DEFAULT_BG := Color(0.12, 0.17, 0.26, 0.9)
+const ROW_HOVER_BG := Color(0.17, 0.24, 0.34, 0.95)
+const ROW_PRESS_BG := Color(0.22, 0.3, 0.42, 0.98)
 const ROW_DEFAULT_BORDER := Color(0.2, 0.35, 0.55, 0.7)
 const ICON_BG_COLOR := Color(0.06, 0.08, 0.13)
 const CONTROL_BG_COLOR := Color(0.1, 0.18, 0.3, 0.8)
@@ -63,8 +65,11 @@ const TRADE_LOG_COLOR := Color(0.72, 0.88, 1.0)
 const BUY_BUTTON_COLOR := Color(0.18, 0.42, 0.2, 0.95)
 const SELL_BUTTON_COLOR := Color(0.17, 0.28, 0.48, 0.95)
 const UI_BUTTON_BG := Color(0.14, 0.26, 0.4, 0.88)
+const UI_BUTTON_HOVER_BG := Color(0.18, 0.32, 0.5, 0.94)
+const UI_BUTTON_PRESS_BG := Color(0.23, 0.39, 0.6, 0.98)
 const TOAST_BG_COLOR := Color(0.05, 0.1, 0.2, 0.92)
 const TOAST_BORDER_COLOR := Color(0.5, 0.9, 1.0, 0.85)
+const INTERACT_FEEDBACK_TIME := 0.14
 
 # Resource definitions: id -> {id, display_name, tier, category, icon, base_price, volume_per_unit, description}
 const RESOURCES := {
@@ -159,12 +164,22 @@ var max_rect := Rect2()
 var sell_all_rect := Rect2()
 var sort_rect := Rect2()
 var dir_rect := Rect2()
-var resource_hit_rects: Array = []
+var control_hit_rects: Array = []
+var mouse_position := Vector2.ZERO
+var hovered_control_id := ""
+var feedback_control_id := ""
+var feedback_timer := 0.0
 
 var engine_player: AudioStreamPlayer
 var boost_player: AudioStreamPlayer
 var dock_start_player: AudioStreamPlayer
 var dock_complete_player: AudioStreamPlayer
+var ui_hover_player: AudioStreamPlayer
+var ui_click_player: AudioStreamPlayer
+var trade_success_player: AudioStreamPlayer
+var trade_fail_player: AudioStreamPlayer
+var audio_prime_player: AudioStreamPlayer
+var audio_primed := false
 var engine_sound_cooldown := 0.0
 
 @onready var hud_label: Label = $CanvasLayer/HudLabel
@@ -233,11 +248,30 @@ func _process(delta: float) -> void:
 		if toast_timer <= 0.0:
 			toast_text = ""
 
+	if feedback_timer > 0.0:
+		feedback_timer -= delta
+		if feedback_timer <= 0.0:
+			feedback_control_id = ""
+
 	update_hud()
 	queue_redraw()
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventMouseMotion:
+		mouse_position = event.position
+		update_hovered_control(true)
+		return
+
+	if event is InputEventMouseButton:
+		mouse_position = event.position
+
+	if event is InputEventMouseButton and event.pressed:
+		prime_audio()
+
+	if event is InputEventKey and event.pressed and not event.echo:
+		prime_audio()
+
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		handle_left_click(event.position)
 		return
@@ -275,7 +309,7 @@ func _draw() -> void:
 	else:
 		draw_ship()
 
-	resource_hit_rects.clear()
+	control_hit_rects.clear()
 	if is_docked and docking_station != null:
 		draw_trade_interface(docking_station)
 
@@ -517,21 +551,34 @@ func get_stock_state(station: Dictionary, resource_id: String) -> String:
 func handle_left_click(pos: Vector2) -> void:
 	if not is_docked or docking_station == null:
 		return
-	if buy_rect.has_point(pos): attempt_trade(true); return
-	if sell_rect.has_point(pos): attempt_trade(false); return
-	if plus_one_rect.has_point(pos): quantity = mini(999, quantity + 1); return
-	if plus_five_rect.has_point(pos): quantity = mini(999, quantity + 5); return
-	if max_rect.has_point(pos): quantity = maxi(1, calc_max_buy(selected_resource_id, docking_station)); return
-	if sell_all_rect.has_point(pos):
-		quantity = maxi(1, get_inventory_amount(player_inventory, selected_resource_id))
-		attempt_trade(false)
+	var control_id: String = get_control_id_at(pos)
+	if control_id.is_empty():
 		return
-	if sort_rect.has_point(pos): cycle_sort(); return
-	if dir_rect.has_point(pos): sort_ascending = not sort_ascending; return
-	for hit in resource_hit_rects:
-		if hit["rect"].has_point(pos):
-			selected_resource_id = hit["resource_id"]
-			return
+
+	trigger_control_feedback(control_id)
+	play_ui_click()
+
+	match control_id:
+		"buy":
+			attempt_trade(true)
+		"sell":
+			attempt_trade(false)
+		"plus_one":
+			quantity = mini(999, quantity + 1)
+		"plus_five":
+			quantity = mini(999, quantity + 5)
+		"max":
+			quantity = maxi(1, calc_max_buy(selected_resource_id, docking_station))
+		"sell_all":
+			quantity = maxi(1, get_inventory_amount(player_inventory, selected_resource_id))
+			attempt_trade(false)
+		"sort":
+			cycle_sort()
+		"dir":
+			sort_ascending = not sort_ascending
+		_:
+			if control_id.begins_with("resource:"):
+				selected_resource_id = control_id.trim_prefix("resource:")
 
 
 func attempt_trade(buy: bool) -> void:
@@ -662,8 +709,10 @@ func draw_player_panel(rect: Rect2, station: Dictionary) -> void:
 
 	sort_rect = Rect2(rect.position + Vector2(10.0, 114.0), Vector2(rect.size.x * 0.58, 22.0))
 	dir_rect = Rect2(rect.position + Vector2(14.0 + rect.size.x * 0.58, 114.0), Vector2(rect.size.x * 0.34 - 20.0, 22.0))
-	draw_rect(sort_rect, CONTROL_BG_COLOR, true)
-	draw_rect(dir_rect, CONTROL_BG_COLOR, true)
+	register_control_rect("sort", sort_rect)
+	register_control_rect("dir", dir_rect)
+	draw_rect(sort_rect, get_control_color(CONTROL_BG_COLOR, "sort"), true)
+	draw_rect(dir_rect, get_control_color(CONTROL_BG_COLOR, "dir"), true)
 	draw_string(ThemeDB.fallback_font, sort_rect.position + Vector2(6.0, 15.0), "Sort: %s" % sort_label(sort_key), HORIZONTAL_ALIGNMENT_LEFT, -1.0, 12)
 	draw_string(ThemeDB.fallback_font, dir_rect.position + Vector2(6.0, 15.0), "Dir: %s" % ("Auf" if sort_ascending else "Ab"), HORIZONTAL_ALIGNMENT_LEFT, -1.0, 12)
 
@@ -675,7 +724,7 @@ func draw_player_panel(rect: Rect2, station: Dictionary) -> void:
 		return
 
 	for i in range(mini(rows.size(), 7)):
-		var row_rect := Rect2(rect.position + Vector2(10.0, start_y + i * 28.0), Vector2(rect.size.x - 20.0, 24.0))
+		var row_rect := Rect2(Vector2(rect.position.x + 10.0, start_y + i * 28.0), Vector2(rect.size.x - 20.0, 24.0))
 		draw_row(rows[i], row_rect, false, station)
 
 
@@ -691,7 +740,7 @@ func draw_station_panel(rect: Rect2, station: Dictionary) -> void:
 		return
 
 	for i in range(mini(rows.size(), 8)):
-		var row_rect := Rect2(rect.position + Vector2(10.0, start_y + i * 28.0), Vector2(rect.size.x - 20.0, 24.0))
+		var row_rect := Rect2(Vector2(rect.position.x + 10.0, start_y + i * 28.0), Vector2(rect.size.x - 20.0, 24.0))
 		draw_row(rows[i], row_rect, true, station)
 
 
@@ -699,14 +748,20 @@ func draw_row(row: Dictionary, rect: Rect2, station_row: bool, station: Dictiona
 	var resource_id: String = str(row["resource_id"])
 	var res: Dictionary = RESOURCES[resource_id]
 	var selected: bool = selected_resource_id == resource_id
+	var control_id := "resource:%s" % resource_id
+	var bg_color := ROW_SELECTED_BG if selected else ROW_DEFAULT_BG
+	if is_control_hovered(control_id):
+		bg_color = ROW_HOVER_BG if not selected else ROW_SELECTED_BG.lightened(0.12)
+	if is_control_active(control_id):
+		bg_color = ROW_PRESS_BG
 
-	draw_rect(rect, ROW_SELECTED_BG if selected else ROW_DEFAULT_BG, true)
+	draw_rect(rect, bg_color, true)
 	draw_rect(rect, PANEL_BORDER if selected else ROW_DEFAULT_BORDER, false, 1.0)
 
 	var icon_rect := Rect2(rect.position + Vector2(3.0, 2.0), Vector2(20.0, 20.0))
 	draw_rect(icon_rect, ICON_BG_COLOR, true)
 	draw_rect(icon_rect, TIER_BORDER_COLOR[res["tier"]], false, 2.0)
-	draw_string(ThemeDB.fallback_font, icon_rect.position + Vector2(4.0, 15.0), res["icon"], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 12)
+	draw_resource_icon(icon_rect, resource_id)
 
 	draw_string(ThemeDB.fallback_font, rect.position + Vector2(28.0, 14.0), "%s T%d" % [res["display_name"], res["tier"]], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 12)
 	draw_string(ThemeDB.fallback_font, rect.position + Vector2(28.0, 23.0), "Menge:%d Wert:%d Vol:%d" % [row["amount"], row["total_value"], row["total_volume"]], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 10)
@@ -714,7 +769,7 @@ func draw_row(row: Dictionary, rect: Rect2, station_row: bool, station: Dictiona
 	if station_row:
 		draw_string(ThemeDB.fallback_font, rect.position + Vector2(rect.size.x - STOCK_STATE_OFFSET, 14.0), get_stock_state(station, resource_id), HORIZONTAL_ALIGNMENT_LEFT, -1.0, 10, STOCK_STATE_COLOR)
 
-	resource_hit_rects.append({"rect": rect, "resource_id": resource_id})
+	register_control_rect(control_id, rect)
 
 
 func draw_trade_panel(rect: Rect2, station: Dictionary) -> void:
@@ -736,16 +791,20 @@ func draw_trade_panel(rect: Rect2, station: Dictionary) -> void:
 	max_rect = Rect2(rect.position + Vector2(116.0, 154.0), Vector2(56.0, 24.0))
 	sell_all_rect = Rect2(rect.position + Vector2(178.0, 154.0), Vector2(120.0, 24.0))
 
-	draw_button(plus_one_rect, "+1")
-	draw_button(plus_five_rect, "+5")
-	draw_button(max_rect, "Max")
-	draw_button(sell_all_rect, "Alles verkaufen")
+	draw_button(plus_one_rect, "+1", "plus_one")
+	draw_button(plus_five_rect, "+5", "plus_five")
+	draw_button(max_rect, "Max", "max")
+	draw_button(sell_all_rect, "Alles verkaufen", "sell_all")
 
 	buy_rect = Rect2(rect.position + Vector2(12.0, 188.0), Vector2(rect.size.x - 24.0, 34.0))
 	sell_rect = Rect2(rect.position + Vector2(12.0, 228.0), Vector2(rect.size.x - 24.0, 34.0))
 
-	draw_rect(buy_rect, BUY_BUTTON_COLOR, true)
-	draw_rect(sell_rect, SELL_BUTTON_COLOR, true)
+	register_control_rect("buy", buy_rect)
+	register_control_rect("sell", sell_rect)
+	draw_rect(buy_rect, get_control_color(BUY_BUTTON_COLOR, "buy"), true)
+	draw_rect(sell_rect, get_control_color(SELL_BUTTON_COLOR, "sell"), true)
+	draw_rect(buy_rect, PANEL_BORDER, false, 1.0)
+	draw_rect(sell_rect, PANEL_BORDER, false, 1.0)
 	draw_string(ThemeDB.fallback_font, buy_rect.position + Vector2(10.0, 22.0), "Kaufen", HORIZONTAL_ALIGNMENT_LEFT, -1.0, 16)
 	draw_string(ThemeDB.fallback_font, sell_rect.position + Vector2(10.0, 22.0), "Verkaufen", HORIZONTAL_ALIGNMENT_LEFT, -1.0, 16)
 
@@ -756,8 +815,9 @@ func draw_trade_panel(rect: Rect2, station: Dictionary) -> void:
 	draw_string(ThemeDB.fallback_font, rect.position + Vector2(90.0, 318.0), recent_trades(), HORIZONTAL_ALIGNMENT_LEFT, -1.0, 11, TRADE_LOG_COLOR)
 
 
-func draw_button(rect: Rect2, text: String) -> void:
-	draw_rect(rect, UI_BUTTON_BG, true)
+func draw_button(rect: Rect2, text: String, control_id: String) -> void:
+	register_control_rect(control_id, rect)
+	draw_rect(rect, get_control_color(UI_BUTTON_BG, control_id), true)
 	draw_rect(rect, PANEL_BORDER, false, 1.0)
 	draw_string(ThemeDB.fallback_font, rect.position + Vector2(7.0, 16.0), text, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 12)
 
@@ -768,6 +828,83 @@ func draw_toast() -> void:
 	draw_rect(rect, TOAST_BG_COLOR, true)
 	draw_rect(rect, TOAST_BORDER_COLOR, false, 1.0)
 	draw_string(ThemeDB.fallback_font, rect.position + Vector2(10.0, 20.0), toast_text, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 13)
+
+
+func draw_resource_icon(icon_rect: Rect2, resource_id: String) -> void:
+	var center := icon_rect.get_center()
+	match resource_id:
+		"wood":
+			var top_plank := Rect2(icon_rect.position + Vector2(4.0, 5.0), Vector2(12.0, 4.0))
+			var bottom_plank := Rect2(icon_rect.position + Vector2(4.0, 11.0), Vector2(12.0, 4.0))
+			draw_rect(top_plank, Color(0.74, 0.5, 0.22), true)
+			draw_rect(bottom_plank, Color(0.58, 0.37, 0.16), true)
+		"coal":
+			draw_circle(center + Vector2(-3.0, 2.0), 4.0, Color(0.25, 0.27, 0.31))
+			draw_circle(center + Vector2(2.0, -1.0), 4.2, Color(0.15, 0.17, 0.22))
+			draw_circle(center + Vector2(4.0, 4.0), 3.0, Color(0.35, 0.37, 0.42))
+		"copper_plate":
+			var plate := Rect2(icon_rect.position + Vector2(4.0, 5.0), Vector2(12.0, 10.0))
+			draw_rect(plate, Color(0.84, 0.47, 0.19), true)
+			draw_rect(plate, Color(1.0, 0.75, 0.42), false, 1.0)
+			draw_line(plate.position + Vector2(0.0, 5.0), plate.position + Vector2(12.0, 5.0), Color(1.0, 0.7, 0.3), 1.0)
+		"plastic":
+			var points := PackedVector2Array([
+				center + Vector2(0.0, -6.0),
+				center + Vector2(5.2, -3.0),
+				center + Vector2(5.2, 3.0),
+				center + Vector2(0.0, 6.0),
+				center + Vector2(-5.2, 3.0),
+				center + Vector2(-5.2, -3.0)
+			])
+			var outline := PackedVector2Array(points)
+			outline.append(points[0])
+			draw_colored_polygon(points, Color(0.42, 0.9, 1.0))
+			draw_polyline(outline, Color(0.9, 0.98, 1.0), 1.2)
+		_:
+			draw_circle(center, 5.0, Color(0.85, 0.88, 0.94))
+
+
+func register_control_rect(control_id: String, rect: Rect2) -> void:
+	control_hit_rects.append({"id": control_id, "rect": rect})
+
+
+func get_control_id_at(pos: Vector2) -> String:
+	for i in range(control_hit_rects.size() - 1, -1, -1):
+		var hit: Dictionary = control_hit_rects[i]
+		var hit_rect: Rect2 = hit["rect"]
+		if hit_rect.has_point(pos):
+			return str(hit["id"])
+	return ""
+
+
+func update_hovered_control(play_sound: bool) -> void:
+	var next_control: String = get_control_id_at(mouse_position)
+	if next_control == hovered_control_id:
+		return
+	hovered_control_id = next_control
+	if play_sound and not hovered_control_id.is_empty():
+		play_ui_hover()
+
+
+func trigger_control_feedback(control_id: String) -> void:
+	feedback_control_id = control_id
+	feedback_timer = INTERACT_FEEDBACK_TIME
+
+
+func is_control_hovered(control_id: String) -> bool:
+	return hovered_control_id == control_id
+
+
+func is_control_active(control_id: String) -> bool:
+	return feedback_timer > 0.0 and feedback_control_id == control_id
+
+
+func get_control_color(base_color: Color, control_id: String) -> Color:
+	if is_control_active(control_id):
+		return UI_BUTTON_PRESS_BG if base_color == UI_BUTTON_BG else base_color.lightened(0.2)
+	if is_control_hovered(control_id):
+		return UI_BUTTON_HOVER_BG if base_color == UI_BUTTON_BG else base_color.lightened(0.1)
+	return base_color
 
 # ─── Inventory ────────────────────────────────────────────────────────────────
 
@@ -886,6 +1023,8 @@ func success_trade(text: String) -> void:
 	toast_text = text
 	toast_timer = 2.0
 	last_trade_failed = false
+	if trade_success_player != null:
+		trade_success_player.play()
 
 
 func fail_trade(text: String) -> void:
@@ -893,6 +1032,8 @@ func fail_trade(text: String) -> void:
 	toast_text = text
 	toast_timer = 2.0
 	last_trade_failed = true
+	if trade_fail_player != null:
+		trade_fail_player.play()
 
 # ─── HUD ──────────────────────────────────────────────────────────────────────
 
@@ -1026,6 +1167,51 @@ func setup_audio() -> void:
 	dock_complete_player.stream = create_tone_stream(0.35, 260.0, 640.0, 0.35)
 	dock_complete_player.volume_db = -5.0
 	add_child(dock_complete_player)
+
+	ui_hover_player = AudioStreamPlayer.new()
+	ui_hover_player.stream = create_tone_stream(0.04, 780.0, 860.0, 0.12)
+	ui_hover_player.volume_db = -18.0
+	add_child(ui_hover_player)
+
+	ui_click_player = AudioStreamPlayer.new()
+	ui_click_player.stream = create_tone_stream(0.05, 620.0, 520.0, 0.18)
+	ui_click_player.volume_db = -13.0
+	add_child(ui_click_player)
+
+	trade_success_player = AudioStreamPlayer.new()
+	trade_success_player.stream = create_tone_stream(0.12, 520.0, 760.0, 0.2)
+	trade_success_player.volume_db = -12.0
+	add_child(trade_success_player)
+
+	trade_fail_player = AudioStreamPlayer.new()
+	trade_fail_player.stream = create_tone_stream(0.1, 280.0, 190.0, 0.22)
+	trade_fail_player.volume_db = -11.0
+	add_child(trade_fail_player)
+
+	audio_prime_player = AudioStreamPlayer.new()
+	audio_prime_player.stream = create_tone_stream(0.03, 440.0, 440.0, 0.001)
+	audio_prime_player.volume_db = -80.0
+	add_child(audio_prime_player)
+
+
+func prime_audio() -> void:
+	if audio_primed:
+		return
+	audio_primed = true
+	if audio_prime_player != null:
+		audio_prime_player.play()
+
+
+func play_ui_hover() -> void:
+	prime_audio()
+	if ui_hover_player != null:
+		ui_hover_player.play()
+
+
+func play_ui_click() -> void:
+	prime_audio()
+	if ui_click_player != null:
+		ui_click_player.play()
 
 
 func create_tone_stream(duration: float, freq_start: float, freq_end: float, amplitude: float) -> AudioStreamWAV:
