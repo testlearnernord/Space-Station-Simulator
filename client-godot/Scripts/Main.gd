@@ -497,9 +497,9 @@ func calculate_base_price(station: Dictionary, resource_id: String) -> float:
 	var target: int = maxi(1, station["target_stock"][resource_id])
 	var current: int = get_inventory_amount(station["inventory"], resource_id)
 	var pressure: float = clampf(float(target - current) / float(target), PRESSURE_CLAMP_MIN, PRESSURE_CLAMP_MAX)
-	var tier_bonus := 1.0 + 0.1 * (res["tier"] - 1)
-	var volatility := 1.0 + pressure * PRESSURE_PRICE_FACTOR + station["event_mod"]
-	var distance_factor := 1.0 + station["distance"] * DISTANCE_PRICE_FACTOR
+	var tier_bonus: float = 1.0 + 0.1 * (float(res["tier"]) - 1.0)
+	var volatility: float = 1.0 + pressure * PRESSURE_PRICE_FACTOR + float(station["event_mod"])
+	var distance_factor: float = 1.0 + float(station["distance"]) * DISTANCE_PRICE_FACTOR
 	var raw: float = res["base_price"] * tier_bonus * volatility * distance_factor
 	return clampf(raw, res["base_price"] * MIN_PRICE_MULTIPLIER, res["base_price"] * MAX_PRICE_MULTIPLIER)
 
@@ -697,7 +697,7 @@ func draw_station_panel(rect: Rect2, station: Dictionary) -> void:
 
 func draw_row(row: Dictionary, rect: Rect2, station_row: bool, station: Dictionary) -> void:
 	var res: Dictionary = RESOURCES[row["resource_id"]]
-	var selected := selected_resource_id == row["resource_id"]
+	var selected: bool = selected_resource_id == str(row["resource_id"])
 
 	draw_rect(rect, ROW_SELECTED_BG if selected else ROW_DEFAULT_BG, true)
 	draw_rect(rect, PANEL_BORDER if selected else ROW_DEFAULT_BORDER, false, 1.0)
