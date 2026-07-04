@@ -724,7 +724,7 @@ func draw_player_panel(rect: Rect2, station: Dictionary) -> void:
 		return
 
 	for i in range(mini(rows.size(), 7)):
-		var row_rect := Rect2(Vector2(rect.position.x + 10.0, start_y + i * 28.0), Vector2(rect.size.x - 20.0, 24.0))
+		var row_rect: Rect2 = Rect2(Vector2(rect.position.x + 10.0, start_y + i * 28.0), Vector2(rect.size.x - 20.0, 24.0))
 		draw_row(rows[i], row_rect, false, station)
 
 
@@ -740,13 +740,13 @@ func draw_station_panel(rect: Rect2, station: Dictionary) -> void:
 		return
 
 	for i in range(mini(rows.size(), 8)):
-		var row_rect := Rect2(Vector2(rect.position.x + 10.0, start_y + i * 28.0), Vector2(rect.size.x - 20.0, 24.0))
+		var row_rect: Rect2 = Rect2(Vector2(rect.position.x + 10.0, start_y + i * 28.0), Vector2(rect.size.x - 20.0, 24.0))
 		draw_row(rows[i], row_rect, true, station)
 
 
 func draw_row(row: Dictionary, rect: Rect2, station_row: bool, station: Dictionary) -> void:
 	var resource_id: String = str(row["resource_id"])
-	var res: Dictionary = RESOURCES[resource_id]
+	var res: Dictionary = Dictionary(RESOURCES[resource_id])
 	var selected: bool = selected_resource_id == resource_id
 	var control_id: String = "resource:%s" % resource_id
 	var bg_color: Color = ROW_SELECTED_BG if selected else ROW_DEFAULT_BG
