@@ -568,6 +568,9 @@ func update_npc_visuals(delta: float) -> void:
 
 		var anchor_station_id: String = str(npc.get("anchor_station_id", npc.get("home_station_id", "")))
 		var anchor_station: Dictionary = get_station_by_id(anchor_station_id)
+		if anchor_station.is_empty() and not stations.is_empty():
+			anchor_station = stations[npc_index % stations.size()]
+			npc["anchor_station_id"] = str(anchor_station["id"])
 		if anchor_station.is_empty():
 			continue
 		var anchor_pos: Vector2 = get_station_npc_anchor(anchor_station, npc_index)
