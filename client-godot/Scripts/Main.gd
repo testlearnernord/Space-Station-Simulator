@@ -23,6 +23,10 @@ const NPC_VISUAL_SPEED := 180.0
 const NPC_VISUAL_MIN_TRAVEL := 1.3
 const NPC_VISUAL_MAX_TRAVEL := 4.2
 const NPC_IDLE_RADIUS := 4.0
+const NPC_ANCHOR_BASE_ANGLE := 0.95
+const NPC_ANCHOR_ANGLE_STEP := 1.63
+const NPC_IDLE_SPEED := 0.9
+const NPC_IDLE_SWAY_RATIO := 1.17
 const SEED_VARIANCE_MIN := -6
 const SEED_VARIANCE_MAX := 6
 const MIN_INITIAL_STOCK := 2
@@ -487,7 +491,7 @@ func get_station_by_id(station_id: String) -> Dictionary:
 
 
 func get_station_npc_anchor(station: Dictionary, npc_index: int) -> Vector2:
-	var angle: float = 0.95 + float(npc_index) * 1.63
+	var angle: float = NPC_ANCHOR_BASE_ANGLE + float(npc_index) * NPC_ANCHOR_ANGLE_STEP
 	var radius: float = 24.0 + float(npc_index % 2) * 8.0
 	var station_position: Vector2 = Vector2(station["position"])
 	return station_position + Vector2(cos(angle), sin(angle)) * radius
@@ -496,7 +500,8 @@ func get_station_npc_anchor(station: Dictionary, npc_index: int) -> Vector2:
 func sync_npc_visuals() -> void:
 	for npc_index in range(npcs.size()):
 		var npc: Dictionary = npcs[npc_index]
-		var anchor_station: Dictionary = get_station_by_id(str(npc.get("anchor_station_id", npc.get("home_station_id", ""))))
+		var anchor_station_id: String = str(npc.get("anchor_station_id", npc.get("home_station_id", "")))
+		var anchor_station: Dictionary = get_station_by_id(anchor_station_id)
 		if anchor_station.is_empty() and not stations.is_empty():
 			anchor_station = stations[npc_index % stations.size()]
 		if anchor_station.is_empty():
@@ -557,13 +562,14 @@ func update_npc_visuals(delta: float) -> void:
 				npc["cargo_resource_id"] = ""
 			continue
 
-		var anchor_station: Dictionary = get_station_by_id(str(npc.get("anchor_station_id", npc.get("home_station_id", ""))))
+		var anchor_station_id: String = str(npc.get("anchor_station_id", npc.get("home_station_id", "")))
+		var anchor_station: Dictionary = get_station_by_id(anchor_station_id)
 		if anchor_station.is_empty():
 			continue
 		var anchor_pos: Vector2 = get_station_npc_anchor(anchor_station, npc_index)
 		var idle_phase: float = float(npc.get("idle_phase", 0.0))
-		var idle_angle: float = visual_time * 0.9 + idle_phase
-		var idle_offset := Vector2(cos(idle_angle), sin(idle_angle * 1.17)) * NPC_IDLE_RADIUS
+		var idle_angle: float = visual_time * NPC_IDLE_SPEED + idle_phase
+		var idle_offset: Vector2 = Vector2(cos(idle_angle), sin(idle_angle * NPC_IDLE_SWAY_RATIO)) * NPC_IDLE_RADIUS
 		npc["visual_position"] = anchor_pos + idle_offset
 		if idle_offset.length_squared() > 0.0001:
 			npc["visual_rotation"] = idle_offset.angle()
@@ -958,7 +964,7 @@ func draw_toast() -> void:
 func draw_resource_icon(icon_rect: Rect2, resource_id: String) -> void:
 	var center: Vector2 = icon_rect.get_center()
 	var resource_color: Color = get_resource_color(resource_id)
-	var glow_rect := Rect2(icon_rect.position + Vector2(1.0, 1.0), icon_rect.size - Vector2(2.0, 2.0))
+	var glow_rect: Rect2 = Rect2(icon_rect.position + Vector2(1.0, 1.0), icon_rect.size - Vector2(2.0, 2.0))
 	draw_rect(glow_rect, resource_color.darkened(0.72), true)
 	draw_rect(glow_rect, resource_color.lightened(0.12), false, 1.0)
 	match resource_id:
@@ -1003,13 +1009,13 @@ func draw_resource_icon(icon_rect: Rect2, resource_id: String) -> void:
 
 
 func draw_npc_ship(marker_pos: Vector2, rotation: float, cargo_resource_id: String) -> void:
-	var forward := Vector2.RIGHT.rotated(rotation)
-	var side := forward.rotated(PI * 0.5)
-	var nose := marker_pos + forward * 7.0
-	var left := marker_pos - forward * 4.8 + side * 4.2
-	var right := marker_pos - forward * 4.8 - side * 4.2
-	var hull := PackedVector2Array([nose, left, marker_pos - forward * 2.2, right])
-	var outline := PackedVector2Array([nose, left, marker_pos - forward * 2.2, right, nose])
+	var forward: Vector2 = Vector2.RIGHT.rotated(rotation)
+	var side: Vector2 = forward.rotated(PI * 0.5)
+	var nose: Vector2 = marker_pos + forward * 7.0
+	var left: Vector2 = marker_pos - forward * 4.8 + side * 4.2
+	var right: Vector2 = marker_pos - forward * 4.8 - side * 4.2
+	var hull: PackedVector2Array = PackedVector2Array([nose, left, marker_pos - forward * 2.2, right])
+	var outline: PackedVector2Array = PackedVector2Array([nose, left, marker_pos - forward * 2.2, right, nose])
 	draw_colored_polygon(hull, NPC_MARKER_COLOR)
 	draw_polyline(outline, Color(0.96, 0.99, 1.0, 0.95), 1.2)
 	draw_circle(marker_pos - forward * 1.0, 1.5, Color(0.08, 0.14, 0.22, 0.95))
