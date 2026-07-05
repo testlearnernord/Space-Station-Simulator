@@ -820,7 +820,10 @@ func attempt_trade(buy: bool) -> void:
 	var sell_price: int = get_station_sell_price(docking_station, resource_id)
 	if get_inventory_amount(player_agent["inventory"], resource_id) < amount: fail_trade("Ressource fehlt im Inventar."); return
 	if get_available_capacity(docking_station["inventory"]) < amount * int(res["volume_per_unit"]): fail_trade("Stationslager ist voll."); return
-	agent_sell_to_station(player_agent, player_agent["inventory"], docking_station, resource_id, amount)
+	var sell_ok: bool = agent_sell_to_station(player_agent, player_agent["inventory"], docking_station, resource_id, amount)
+	if not sell_ok:
+		fail_trade("Verkauf fehlgeschlagen.")
+		return
 	add_trade_log("Verkauft: %d [%s] %s @ %d an %s" % [amount, get_resource_short_label(resource_id), res["display_name"], sell_price, docking_station["name"]])
 	success_trade("Verkauf erfolgreich.")
 
