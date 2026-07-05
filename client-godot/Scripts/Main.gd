@@ -480,7 +480,8 @@ func get_dock_point(station: Dictionary) -> Vector2:
 
 func get_station_by_id(station_id: String) -> Dictionary:
 	for station in stations:
-		if str(station["id"]) == station_id:
+		var station_id_str: String = str(station["id"])
+		if station_id_str == station_id:
 			return station
 	return {}
 
@@ -488,7 +489,8 @@ func get_station_by_id(station_id: String) -> Dictionary:
 func get_station_npc_anchor(station: Dictionary, npc_index: int) -> Vector2:
 	var angle: float = 0.95 + float(npc_index) * 1.63
 	var radius: float = 24.0 + float(npc_index % 2) * 8.0
-	return station["position"] + Vector2(cos(angle), sin(angle)) * radius
+	var station_position: Vector2 = Vector2(station["position"])
+	return station_position + Vector2(cos(angle), sin(angle)) * radius
 
 
 func sync_npc_visuals() -> void:
@@ -511,9 +513,11 @@ func start_npc_visual_route(npc: Dictionary, npc_index: int, from: Dictionary, t
 	var start_pos: Vector2 = get_station_npc_anchor(from, npc_index)
 	var end_pos: Vector2 = get_station_npc_anchor(to, npc_index)
 	var distance: float = start_pos.distance_to(end_pos)
-	npc["anchor_station_id"] = str(to["id"])
-	npc["route_from_id"] = str(from["id"])
-	npc["route_to_id"] = str(to["id"])
+	var from_id: String = str(from["id"])
+	var to_id: String = str(to["id"])
+	npc["anchor_station_id"] = to_id
+	npc["route_from_id"] = from_id
+	npc["route_to_id"] = to_id
 	npc["travel_progress"] = 0.0
 	npc["travel_time"] = clampf(distance / NPC_VISUAL_SPEED, NPC_VISUAL_MIN_TRAVEL, NPC_VISUAL_MAX_TRAVEL)
 	npc["visual_position"] = start_pos
@@ -766,7 +770,7 @@ func draw_station_node(station: Dictionary, index: int) -> void:
 func draw_npc_markers() -> void:
 	for npc_index in range(npcs.size()):
 		var npc: Dictionary = npcs[npc_index]
-		var marker_pos: Vector2 = npc["visual_position"]
+		var marker_pos: Vector2 = Vector2(npc["visual_position"])
 		var rotation: float = float(npc.get("visual_rotation", 0.0))
 		var cargo_resource_id: String = str(npc.get("cargo_resource_id", ""))
 		draw_npc_ship(marker_pos, rotation, cargo_resource_id)
@@ -953,10 +957,10 @@ func draw_toast() -> void:
 
 func draw_resource_icon(icon_rect: Rect2, resource_id: String) -> void:
 	var center: Vector2 = icon_rect.get_center()
-	var tint: Color = get_resource_color(resource_id)
+	var resource_color: Color = get_resource_color(resource_id)
 	var glow_rect := Rect2(icon_rect.position + Vector2(1.0, 1.0), icon_rect.size - Vector2(2.0, 2.0))
-	draw_rect(glow_rect, tint.darkened(0.72), true)
-	draw_rect(glow_rect, tint.lightened(0.12), false, 1.0)
+	draw_rect(glow_rect, resource_color.darkened(0.72), true)
+	draw_rect(glow_rect, resource_color.lightened(0.12), false, 1.0)
 	match resource_id:
 		"wood":
 			var top_plank := Rect2(icon_rect.position + Vector2(3.0, 3.0), Vector2(icon_rect.size.x - 6.0, 4.0))
@@ -994,7 +998,7 @@ func draw_resource_icon(icon_rect: Rect2, resource_id: String) -> void:
 			draw_polyline(outline, Color(0.9, 0.98, 1.0), 1.2)
 			draw_line(center + Vector2(-2.8, -1.0), center + Vector2(2.8, 1.0), Color(0.96, 1.0, 1.0, 0.9), 1.0)
 		_:
-			draw_circle(center, 5.8, tint)
+			draw_circle(center, 5.8, resource_color)
 	draw_string(ThemeDB.fallback_font, icon_rect.position + Vector2(3.0, icon_rect.size.y - 2.5), get_resource_short_label(resource_id), HORIZONTAL_ALIGNMENT_LEFT, -1.0, 7, Color(0.96, 0.98, 1.0))
 
 
