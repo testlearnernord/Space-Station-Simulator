@@ -478,11 +478,11 @@ func get_dock_point(station: Dictionary) -> Vector2:
 	return station["position"] + Vector2(34.0, 0.0)
 
 
-func get_station_by_id(station_id: String):
+func get_station_by_id(station_id: String) -> Dictionary:
 	for station in stations:
 		if str(station["id"]) == station_id:
 			return station
-	return null
+	return {}
 
 
 func get_station_npc_anchor(station: Dictionary, npc_index: int) -> Vector2:
@@ -494,10 +494,10 @@ func get_station_npc_anchor(station: Dictionary, npc_index: int) -> Vector2:
 func sync_npc_visuals() -> void:
 	for npc_index in range(npcs.size()):
 		var npc: Dictionary = npcs[npc_index]
-		var anchor_station = get_station_by_id(str(npc.get("anchor_station_id", npc.get("home_station_id", ""))))
-		if anchor_station == null and not stations.is_empty():
+		var anchor_station: Dictionary = get_station_by_id(str(npc.get("anchor_station_id", npc.get("home_station_id", ""))))
+		if anchor_station.is_empty() and not stations.is_empty():
 			anchor_station = stations[npc_index % stations.size()]
-		if anchor_station == null:
+		if anchor_station.is_empty():
 			continue
 		npc["route_from_id"] = ""
 		npc["route_to_id"] = ""
@@ -529,9 +529,9 @@ func update_npc_visuals(delta: float) -> void:
 		var travel_progress: float = float(npc.get("travel_progress", 1.0))
 
 		if not route_from_id.is_empty() and not route_to_id.is_empty() and travel_progress < 1.0:
-			var from_station = get_station_by_id(route_from_id)
-			var to_station = get_station_by_id(route_to_id)
-			if from_station == null or to_station == null:
+			var from_station: Dictionary = get_station_by_id(route_from_id)
+			var to_station: Dictionary = get_station_by_id(route_to_id)
+			if from_station.is_empty() or to_station.is_empty():
 				npc["route_from_id"] = ""
 				npc["route_to_id"] = ""
 				npc["travel_progress"] = 1.0
@@ -553,8 +553,8 @@ func update_npc_visuals(delta: float) -> void:
 				npc["cargo_resource_id"] = ""
 			continue
 
-		var anchor_station = get_station_by_id(str(npc.get("anchor_station_id", npc.get("home_station_id", ""))))
-		if anchor_station == null:
+		var anchor_station: Dictionary = get_station_by_id(str(npc.get("anchor_station_id", npc.get("home_station_id", ""))))
+		if anchor_station.is_empty():
 			continue
 		var anchor_pos: Vector2 = get_station_npc_anchor(anchor_station, npc_index)
 		var idle_phase: float = float(npc.get("idle_phase", 0.0))
