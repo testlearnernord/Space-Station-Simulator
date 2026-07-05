@@ -131,7 +131,9 @@ const STATION_TYPES := {
 var rng := RandomNumberGenerator.new()
 var stations: Array = []
 var npcs: Array = []
-var player_inventory: Dictionary = {"capacity": CARGO_CAPACITY, "stacks": {}}
+# Unified agent dict for the player — same structure as NPC agents.
+# Keys: "credits" (int), "inventory" (Dictionary with "capacity" and "stacks")
+var player_agent: Dictionary = {"credits": 600, "inventory": {"capacity": CARGO_CAPACITY, "stacks": {}}}
 var avg_buy_price: Dictionary = {}
 var trade_log: Array = []
 var stars: Array = []
@@ -139,8 +141,6 @@ var stars: Array = []
 var player_position := Vector2(130, 120)
 var player_velocity := Vector2.ZERO
 var player_rotation := 0.0
-
-var credits := 600
 var is_docked := false
 var docking_station = null
 var docking_progress := 0.0
@@ -244,11 +244,11 @@ func _process(delta: float) -> void:
 		save_accumulator = 0.0
 		save_state()
 
-	if credits >= 2000 and not goal_reached:
+	if int(player_agent["credits"]) >= 2000 and not goal_reached:
 		goal_reached = true
 		status = "Goal reached! Keep optimizing your trade routes."
 
-	if credits >= 2600 and not has_own_station:
+	if int(player_agent["credits"]) >= 2600 and not has_own_station:
 		has_own_station = true
 		build_player_station()
 		status = "You founded a private station node."
@@ -331,7 +331,7 @@ func _draw() -> void:
 func setup_defaults() -> void:
 	stations.clear()
 	npcs.clear()
-	player_inventory = {"capacity": CARGO_CAPACITY, "stacks": {}}
+	player_agent = {"credits": 600, "inventory": {"capacity": CARGO_CAPACITY, "stacks": {}}}
 	avg_buy_price.clear()
 
 	stations.append(create_station("station_a", "Atlas Hub", Vector2(260, 160), "mining_outpost", 4.0, 0.01))
@@ -384,7 +384,13 @@ func create_npc(npc_name: String, cargo_capacity: int, efficiency: float, statio
 		"visual_position": get_station_npc_anchor(anchor_station, station_index),
 		"visual_rotation": 0.0,
 		"idle_phase": rng.randf_range(0.0, TAU),
-		"cargo_resource_id": ""
+		"cargo_resource_id": "",
+		# Agent fields — same model as the player
+		"inventory": {"capacity": cargo_capacity, "stacks": {}},
+		"credits": 400,
+		"state": "idle",
+		"cargo_amount": 0,
+		"destination_station_id": ""
 	}
 
 # ─── Movement ─────────────────────────────────────────────────────────────────
@@ -561,6 +567,25 @@ func update_npc_visuals(delta: float) -> void:
 			npc["travel_progress"] = travel_progress
 
 			if travel_progress >= 1.0:
+				# Phase 3 – NPC sells its cargo on arrival
+				var npc_state: String = str(npc.get("state", "idle"))
+				var cr_id: String = str(npc.get("cargo_resource_id", ""))
+				var c_amount: int = int(npc.get("cargo_amount", 0))
+				if npc_state == "traveling_to_sell" and c_amount > 0 and not cr_id.is_empty() and RESOURCES.has(cr_id):
+					var dest_id: String = str(npc.get("destination_station_id", npc.get("anchor_station_id", "")))
+					var dest: Dictionary = get_station_by_id(dest_id)
+					var npc_inv: Dictionary = npc.get("inventory", {})
+					if not dest.is_empty() and not npc_inv.is_empty():
+						var sell_price: int = get_station_sell_price(dest, cr_id)
+						var ok: bool = agent_sell_to_station(npc, npc_inv, dest, cr_id, c_amount)
+						if ok:
+							var res: Dictionary = RESOURCES[cr_id]
+							add_trade_log("NPC %s: Verkauft %d %s @ %d bei %s (Kontostand: %d cr)" % [
+								str(npc.get("name", "NPC")), c_amount, str(res["display_name"]),
+								sell_price, str(dest["name"]), int(npc.get("credits", 0))])
+				npc["state"] = "idle"
+				npc["cargo_amount"] = 0
+				npc["destination_station_id"] = ""
 				npc["route_from_id"] = ""
 				npc["route_to_id"] = ""
 				npc["cargo_resource_id"] = ""
@@ -604,7 +629,11 @@ func run_npc_trades() -> void:
 		return
 	for npc_index in range(npcs.size()):
 		var npc: Dictionary = npcs[npc_index]
-		if rng.randf() > npc["efficiency"]:
+		# Only idle NPCs start new trades
+		var npc_state: String = str(npc.get("state", "idle"))
+		if npc_state != "idle":
+			continue
+		if rng.randf() > float(npc["efficiency"]):
 			continue
 		var route = find_npc_route(npc)
 		if route == null:
@@ -613,36 +642,50 @@ func run_npc_trades() -> void:
 		var from: Dictionary = route["from"]
 		var to: Dictionary = route["to"]
 		var amount: int = route["amount"]
+		var npc_inv: Dictionary = npc["inventory"]
+		var vol: int = int(RESOURCES[resource_id]["volume_per_unit"])
 		amount = mini(amount, get_inventory_amount(from["inventory"], resource_id))
-		var vol: int = RESOURCES[resource_id]["volume_per_unit"]
-		amount = mini(amount, get_available_capacity(to["inventory"]) / vol)
+		amount = mini(amount, get_available_capacity(npc_inv) / vol)
 		if amount <= 0:
 			continue
-		remove_from_inventory(from["inventory"], resource_id, amount)
-		add_to_inventory(to["inventory"], resource_id, amount)
+		# Phase 1 – NPC buys cargo from the source station
+		var ok: bool = agent_buy_from_station(npc, npc_inv, from, resource_id, amount)
+		if not ok:
+			continue
+		npc["cargo_amount"] = amount
+		npc["state"] = "traveling_to_sell"
+		npc["destination_station_id"] = str(to["id"])
 		start_npc_visual_route(npc, npc_index, from, to, resource_id)
 		var res: Dictionary = RESOURCES[resource_id]
-		add_trade_log("NPC %s: %d [%s] %s %s → %s" % [npc["name"], amount, get_resource_short_label(resource_id), res["display_name"], from["name"], to["name"]])
+		var buy_price: int = get_station_buy_price(from, resource_id)
+		add_trade_log("NPC %s: Kauft %d %s @ %d von %s" % [str(npc["name"]), amount, str(res["display_name"]), buy_price, str(from["name"])])
 
 
 func find_npc_route(npc: Dictionary):
+	var npc_credits: int = int(npc.get("credits", 0))
+	var npc_inv: Dictionary = npc.get("inventory", {})
+	var npc_free: int = get_available_capacity(npc_inv) if not npc_inv.is_empty() else int(npc.get("cargo_capacity", 20))
 	var best_profit := 0.0
 	var best = null
 	for resource_id in RESOURCE_IDS:
-		var vol: int = RESOURCES[resource_id]["volume_per_unit"]
+		var vol: int = int(RESOURCES[resource_id]["volume_per_unit"])
 		for from in stations:
 			for to in stations:
 				if from["id"] == to["id"]:
 					continue
-				var unit_profit := float(get_station_sell_price(to, resource_id) - get_station_buy_price(from, resource_id))
+				var buy_price: int = get_station_buy_price(from, resource_id)
+				var sell_price: int = get_station_sell_price(to, resource_id)
+				var unit_profit: float = float(sell_price - buy_price)
 				if unit_profit < 2.0:
 					continue
-				var amount := mini(get_inventory_amount(from["inventory"], resource_id), npc["cargo_capacity"] / vol)
-				amount = mini(amount, get_available_capacity(to["inventory"]) / vol)
-				amount = maxi(0, int(round(amount * rng.randf_range(NPC_MIN_TRADE_RATIO, NPC_MAX_TRADE_RATIO))))
+				var max_amount: int = mini(get_inventory_amount(from["inventory"], resource_id), npc_free / vol)
+				max_amount = mini(max_amount, get_available_capacity(to["inventory"]) / vol)
+				if buy_price > 0:
+					max_amount = mini(max_amount, npc_credits / buy_price)
+				var amount: int = maxi(0, int(round(float(max_amount) * rng.randf_range(NPC_MIN_TRADE_RATIO, NPC_MAX_TRADE_RATIO))))
 				if amount <= 0:
 					continue
-				var expected := unit_profit * amount
+				var expected: float = unit_profit * float(amount)
 				if expected <= best_profit:
 					continue
 				best_profit = expected
@@ -681,6 +724,47 @@ func get_stock_state(station: Dictionary, resource_id: String) -> String:
 
 # ─── Trade ────────────────────────────────────────────────────────────────────
 
+# Shared agent trade helpers — used identically for player and NPCs.
+# agent_dict must contain a "credits" key (int).
+# agent_inv is the agent's inventory dict (with "capacity" and "stacks").
+
+func agent_buy_from_station(agent_dict: Dictionary, agent_inv: Dictionary, station: Dictionary, resource_id: String, amount: int) -> bool:
+	if amount <= 0:
+		return false
+	var price: int = get_station_buy_price(station, resource_id)
+	var cost: int = amount * price
+	var agent_creds: int = int(agent_dict.get("credits", 0))
+	if agent_creds < cost:
+		return false
+	if get_inventory_amount(station["inventory"], resource_id) < amount:
+		return false
+	var res: Dictionary = RESOURCES[resource_id]
+	var vol: int = int(res["volume_per_unit"])
+	if get_available_capacity(agent_inv) < amount * vol:
+		return false
+	agent_dict["credits"] = agent_creds - cost
+	remove_from_inventory(station["inventory"], resource_id, amount)
+	add_to_inventory(agent_inv, resource_id, amount)
+	return true
+
+
+func agent_sell_to_station(agent_dict: Dictionary, agent_inv: Dictionary, station: Dictionary, resource_id: String, amount: int) -> bool:
+	if amount <= 0:
+		return false
+	if get_inventory_amount(agent_inv, resource_id) < amount:
+		return false
+	var res: Dictionary = RESOURCES[resource_id]
+	var vol: int = int(res["volume_per_unit"])
+	if get_available_capacity(station["inventory"]) < amount * vol:
+		return false
+	var sell_price: int = get_station_sell_price(station, resource_id)
+	var gain: int = amount * sell_price
+	agent_dict["credits"] = int(agent_dict.get("credits", 0)) + gain
+	remove_from_inventory(agent_inv, resource_id, amount)
+	add_to_inventory(station["inventory"], resource_id, amount)
+	return true
+
+
 func handle_left_click(pos: Vector2) -> void:
 	if not is_docked or docking_station == null:
 		return
@@ -703,7 +787,7 @@ func handle_left_click(pos: Vector2) -> void:
 		"max":
 			quantity = maxi(1, calc_max_buy(selected_resource_id, docking_station))
 		"sell_all":
-			quantity = maxi(1, get_inventory_amount(player_inventory, selected_resource_id))
+			quantity = maxi(1, get_inventory_amount(player_agent["inventory"], selected_resource_id))
 			attempt_trade(false)
 		"sort":
 			cycle_sort()
@@ -722,26 +806,21 @@ func attempt_trade(buy: bool) -> void:
 	var res: Dictionary = RESOURCES[resource_id]
 
 	if buy:
-		var price := get_station_buy_price(docking_station, resource_id)
-		var cost := amount * price
-		if credits < cost: fail_trade("Nicht genug Credits."); return
+		var price: int = get_station_buy_price(docking_station, resource_id)
+		var cost: int = amount * price
+		if int(player_agent["credits"]) < cost: fail_trade("Nicht genug Credits."); return
 		if get_inventory_amount(docking_station["inventory"], resource_id) < amount: fail_trade("Station hat zu wenig Bestand."); return
-		if get_available_capacity(player_inventory) < amount * res["volume_per_unit"]: fail_trade("Nicht genug Frachtraum."); return
-		credits -= cost
-		remove_from_inventory(docking_station["inventory"], resource_id, amount)
-		add_to_inventory(player_inventory, resource_id, amount)
+		if get_available_capacity(player_agent["inventory"]) < amount * int(res["volume_per_unit"]): fail_trade("Nicht genug Frachtraum."); return
+		agent_buy_from_station(player_agent, player_agent["inventory"], docking_station, resource_id, amount)
 		update_average_buy(resource_id, amount, price)
 		add_trade_log("Gekauft: %d [%s] %s @ %d von %s" % [amount, get_resource_short_label(resource_id), res["display_name"], price, docking_station["name"]])
 		success_trade("Kauf erfolgreich.")
 		return
 
-	var sell_price := get_station_sell_price(docking_station, resource_id)
-	var gain := amount * sell_price
-	if get_inventory_amount(player_inventory, resource_id) < amount: fail_trade("Ressource fehlt im Inventar."); return
-	if get_available_capacity(docking_station["inventory"]) < amount * res["volume_per_unit"]: fail_trade("Stationslager ist voll."); return
-	credits += gain
-	remove_from_inventory(player_inventory, resource_id, amount)
-	add_to_inventory(docking_station["inventory"], resource_id, amount)
+	var sell_price: int = get_station_sell_price(docking_station, resource_id)
+	if get_inventory_amount(player_agent["inventory"], resource_id) < amount: fail_trade("Ressource fehlt im Inventar."); return
+	if get_available_capacity(docking_station["inventory"]) < amount * int(res["volume_per_unit"]): fail_trade("Stationslager ist voll."); return
+	agent_sell_to_station(player_agent, player_agent["inventory"], docking_station, resource_id, amount)
 	add_trade_log("Verkauft: %d [%s] %s @ %d an %s" % [amount, get_resource_short_label(resource_id), res["display_name"], sell_price, docking_station["name"]])
 	success_trade("Verkauf erfolgreich.")
 
@@ -835,9 +914,9 @@ func draw_panel(rect: Rect2, title: String) -> void:
 
 
 func draw_player_panel(rect: Rect2, station: Dictionary) -> void:
-	draw_string(ThemeDB.fallback_font, rect.position + Vector2(12.0, 48.0), "Credits: %d" % credits, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 14, CREDIT_COLOR)
-	draw_string(ThemeDB.fallback_font, rect.position + Vector2(12.0, 68.0), "Cargo: %d / %d" % [get_used_capacity(player_inventory), player_inventory["capacity"]], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 13)
-	draw_string(ThemeDB.fallback_font, rect.position + Vector2(12.0, 88.0), "Inventarwert: %d cr" % get_inventory_value(player_inventory, station, false), HORIZONTAL_ALIGNMENT_LEFT, -1.0, 13)
+	draw_string(ThemeDB.fallback_font, rect.position + Vector2(12.0, 48.0), "Credits: %d" % int(player_agent["credits"]), HORIZONTAL_ALIGNMENT_LEFT, -1.0, 14, CREDIT_COLOR)
+	draw_string(ThemeDB.fallback_font, rect.position + Vector2(12.0, 68.0), "Cargo: %d / %d" % [get_used_capacity(player_agent["inventory"]), int(player_agent["inventory"]["capacity"])], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 13)
+	draw_string(ThemeDB.fallback_font, rect.position + Vector2(12.0, 88.0), "Inventarwert: %d cr" % get_inventory_value(player_agent["inventory"], station, false), HORIZONTAL_ALIGNMENT_LEFT, -1.0, 13)
 	draw_string(ThemeDB.fallback_font, rect.position + Vector2(12.0, 108.0), "Suche: %s" % ("(leer)" if search.is_empty() else search), HORIZONTAL_ALIGNMENT_LEFT, -1.0, 12)
 
 	sort_rect = Rect2(rect.position + Vector2(10.0, 114.0), Vector2(rect.size.x * 0.58, 22.0))
@@ -849,7 +928,7 @@ func draw_player_panel(rect: Rect2, station: Dictionary) -> void:
 	draw_string(ThemeDB.fallback_font, sort_rect.position + Vector2(6.0, 15.0), "Sort: %s" % sort_label(sort_key), HORIZONTAL_ALIGNMENT_LEFT, -1.0, 12)
 	draw_string(ThemeDB.fallback_font, dir_rect.position + Vector2(6.0, 15.0), "Dir: %s" % ("Auf" if sort_ascending else "Ab"), HORIZONTAL_ALIGNMENT_LEFT, -1.0, 12)
 
-	var rows := get_rows(player_inventory, station, false)
+	var rows := get_rows(player_agent["inventory"], station, false)
 	var start_y := rect.position.y + 146.0
 
 	if rows.is_empty():
@@ -947,8 +1026,8 @@ func draw_trade_panel(rect: Rect2, station: Dictionary) -> void:
 	draw_string(ThemeDB.fallback_font, sell_rect.position + Vector2(10.0, 22.0), "Verkaufen", HORIZONTAL_ALIGNMENT_LEFT, -1.0, 16)
 
 	var needed_cargo: int = quantity * int(res["volume_per_unit"])
-	draw_string(ThemeDB.fallback_font, rect.position + Vector2(12.0, 280.0), "Credits: %d" % credits, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 12, CREDIT_COLOR)
-	draw_string(ThemeDB.fallback_font, rect.position + Vector2(12.0, 298.0), "Cargo frei / benötigt: %d / %d" % [get_available_capacity(player_inventory), needed_cargo], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 12)
+	draw_string(ThemeDB.fallback_font, rect.position + Vector2(12.0, 280.0), "Credits: %d" % int(player_agent["credits"]), HORIZONTAL_ALIGNMENT_LEFT, -1.0, 12, CREDIT_COLOR)
+	draw_string(ThemeDB.fallback_font, rect.position + Vector2(12.0, 298.0), "Cargo frei / benötigt: %d / %d" % [get_available_capacity(player_agent["inventory"]), needed_cargo], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 12)
 	draw_string(ThemeDB.fallback_font, rect.position + Vector2(12.0, 318.0), "Letzte Trades:", HORIZONTAL_ALIGNMENT_LEFT, -1.0, 11)
 	draw_string(ThemeDB.fallback_font, rect.position + Vector2(90.0, 318.0), recent_trades(), HORIZONTAL_ALIGNMENT_LEFT, -1.0, 11, TRADE_LOG_COLOR)
 
@@ -1174,11 +1253,11 @@ func get_inventory_value(inventory: Dictionary, station: Dictionary, buy_prices:
 
 
 func calc_max_buy(resource_id: String, station: Dictionary) -> int:
-	var price := maxi(1, get_station_buy_price(station, resource_id))
-	var affordable := credits / price
-	var stock := get_inventory_amount(station["inventory"], resource_id)
-	var vol: int = RESOURCES[resource_id]["volume_per_unit"]
-	var room := get_available_capacity(player_inventory) / vol
+	var price: int = maxi(1, get_station_buy_price(station, resource_id))
+	var affordable: int = int(player_agent["credits"]) / price
+	var stock: int = get_inventory_amount(station["inventory"], resource_id)
+	var vol: int = int(RESOURCES[resource_id]["volume_per_unit"])
+	var room: int = get_available_capacity(player_agent["inventory"]) / vol
 	return maxi(0, mini(stock, mini(affordable, room)))
 
 
@@ -1188,8 +1267,8 @@ func calc_expected_profit(resource_id: String, amount: int, sell_price: int) -> 
 
 
 func update_average_buy(resource_id: String, amount: int, unit_price: int) -> void:
-	var new_amount := get_inventory_amount(player_inventory, resource_id)
-	var old_amount := new_amount - amount
+	var new_amount: int = get_inventory_amount(player_agent["inventory"], resource_id)
+	var old_amount: int = new_amount - amount
 	if new_amount <= 0:
 		avg_buy_price.erase(resource_id)
 		return
@@ -1235,9 +1314,9 @@ func fail_trade(text: String) -> void:
 
 func update_hud() -> void:
 	var ref_station = docking_station if docking_station != null else (stations[0] if not stations.is_empty() else null)
-	var ship_value := get_inventory_value(player_inventory, ref_station, false) if ref_station != null else 0
+	var ship_value: int = get_inventory_value(player_agent["inventory"], ref_station, false) if ref_station != null else 0
 	hud_label.text = "Credits: %d   Cargo: %d/%d   Stationen: %d   Schiffswert: %d   Ziel: 2000" % [
-		credits, get_used_capacity(player_inventory), player_inventory["capacity"], stations.size(), ship_value
+		int(player_agent["credits"]), get_used_capacity(player_agent["inventory"]), int(player_agent["inventory"]["capacity"]), stations.size(), ship_value
 	]
 
 	var dock_text: String
@@ -1447,13 +1526,25 @@ func save_state() -> void:
 			"target_stock": st["target_stock"].duplicate(),
 			"inventory": _save_inventory(st["inventory"])
 		})
+	var npcs_data := []
+	for npc in npcs:
+		var npc_cap: int = int(npc.get("cargo_capacity", 20))
+		npcs_data.append({
+			"name": str(npc["name"]),
+			"cargo_capacity": npc_cap,
+			"efficiency": float(npc["efficiency"]),
+			"home_station_id": str(npc.get("home_station_id", "")),
+			"credits": int(npc.get("credits", 400)),
+			"inventory": _save_inventory(npc.get("inventory", {"capacity": npc_cap, "stacks": {}}))
+		})
 	var save := {
 		"version": SAVE_VERSION,
-		"credits": credits,
+		"credits": int(player_agent["credits"]),
 		"player_position": {"x": player_position.x, "y": player_position.y},
-		"player_inventory": _save_inventory(player_inventory),
+		"player_inventory": _save_inventory(player_agent["inventory"]),
 		"avg_buy_price": avg_buy_price.duplicate(),
 		"stations": stations_data,
+		"npcs": npcs_data,
 		"trade_log": trade_log.duplicate(),
 		"goal_reached": goal_reached,
 		"has_own_station": has_own_station,
@@ -1485,10 +1576,10 @@ func load_state() -> void:
 		return
 	var data: Dictionary = parsed
 
-	credits = maxi(0, int(data.get("credits", 600)))
+	player_agent["credits"] = maxi(0, int(data.get("credits", 600)))
 	var pp = data.get("player_position", {"x": 130, "y": 120})
 	player_position = Vector2(float(pp.get("x", 130)), float(pp.get("y", 120)))
-	_restore_inventory(player_inventory, data.get("player_inventory", {}), CARGO_CAPACITY)
+	_restore_inventory(player_agent["inventory"], data.get("player_inventory", {}), CARGO_CAPACITY)
 
 	avg_buy_price.clear()
 	var abp = data.get("avg_buy_price", {})
@@ -1519,6 +1610,21 @@ func load_state() -> void:
 					station["target_stock"][resource_id] = maxi(0, int(saved_ts.get(resource_id, STATION_TYPES[type_id]["target_stock"][resource_id])))
 			_restore_inventory(station["inventory"], st_data.get("inventory", {}), STATION_TYPES[type_id]["capacity"])
 			stations.append(station)
+
+	# Restore NPC credits and inventories; state resets to idle on load
+	var saved_npcs = data.get("npcs", [])
+	if saved_npcs is Array and not saved_npcs.is_empty():
+		for i in range(mini(saved_npcs.size(), npcs.size())):
+			var nd = saved_npcs[i]
+			if nd is Dictionary:
+				var npc: Dictionary = npcs[i]
+				npc["credits"] = maxi(0, int(nd.get("credits", 400)))
+				var npc_cap: int = int(npc.get("cargo_capacity", 20))
+				_restore_inventory(npc["inventory"], nd.get("inventory", {}), npc_cap)
+				# In-transit cargo is dropped on reload; NPC resumes trading fresh
+				npc["state"] = "idle"
+				npc["cargo_amount"] = 0
+				npc["destination_station_id"] = ""
 
 	var tl = data.get("trade_log", [])
 	trade_log.clear()
