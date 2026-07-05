@@ -19,6 +19,14 @@ const NPC_TICK := 2.4
 const SAVE_TICK := 5.0
 const MAX_TRADE_LOG := 12
 const STARFIELD_COUNT := 95
+const NPC_VISUAL_SPEED := 180.0
+const NPC_VISUAL_MIN_TRAVEL := 1.3
+const NPC_VISUAL_MAX_TRAVEL := 4.2
+const NPC_IDLE_RADIUS := 4.0
+const NPC_ANCHOR_BASE_ANGLE := 0.95
+const NPC_ANCHOR_ANGLE_STEP := 1.63
+const NPC_IDLE_SPEED := 0.9
+const NPC_IDLE_SWAY_RATIO := 1.17
 const SEED_VARIANCE_MIN := -6
 const SEED_VARIANCE_MAX := 6
 const MIN_INITIAL_STOCK := 2
@@ -230,6 +238,8 @@ func _process(delta: float) -> void:
 		npc_accumulator = 0.0
 		run_npc_trades()
 
+	update_npc_visuals(delta)
+
 	if save_accumulator >= SAVE_TICK:
 		save_accumulator = 0.0
 		save_state()
@@ -335,9 +345,10 @@ func setup_defaults() -> void:
 			var initial := clampi(target + rng.randi_range(SEED_VARIANCE_MIN, SEED_VARIANCE_MAX), MIN_INITIAL_STOCK, target + MAX_INITIAL_STOCK_BONUS)
 			add_to_inventory(station["inventory"], resource_id, initial)
 
-	npcs.append({"name": "Local Trader", "cargo_capacity": 20, "efficiency": 0.65})
-	npcs.append({"name": "Bulk Hauler", "cargo_capacity": 28, "efficiency": 0.82})
-	npcs.append({"name": "Opportunist", "cargo_capacity": 18, "efficiency": 0.55})
+	npcs.append(create_npc("Local Trader", 20, 0.65, 0))
+	npcs.append(create_npc("Bulk Hauler", 28, 0.82, 1))
+	npcs.append(create_npc("Opportunist", 18, 0.55, 2))
+	sync_npc_visuals()
 
 
 func create_station(id: String, sname: String, position: Vector2, type_id: String, distance: float, event_mod: float) -> Dictionary:
@@ -354,6 +365,26 @@ func create_station(id: String, sname: String, position: Vector2, type_id: Strin
 		"event_mod": event_mod,
 		"inventory": {"capacity": stype["capacity"], "stacks": {}},
 		"target_stock": target_stock
+	}
+
+
+func create_npc(npc_name: String, cargo_capacity: int, efficiency: float, station_index: int) -> Dictionary:
+	var anchor_station: Dictionary = stations[station_index % stations.size()]
+	var anchor_station_id: String = str(anchor_station["id"])
+	return {
+		"name": npc_name,
+		"cargo_capacity": cargo_capacity,
+		"efficiency": efficiency,
+		"home_station_id": anchor_station_id,
+		"anchor_station_id": anchor_station_id,
+		"route_from_id": "",
+		"route_to_id": "",
+		"travel_progress": 1.0,
+		"travel_time": NPC_VISUAL_MIN_TRAVEL,
+		"visual_position": get_station_npc_anchor(anchor_station, station_index),
+		"visual_rotation": 0.0,
+		"idle_phase": rng.randf_range(0.0, TAU),
+		"cargo_resource_id": ""
 	}
 
 # ─── Movement ─────────────────────────────────────────────────────────────────
@@ -450,6 +481,106 @@ func find_closest_station(max_distance: float):
 func get_dock_point(station: Dictionary) -> Vector2:
 	return station["position"] + Vector2(34.0, 0.0)
 
+
+func get_station_by_id(station_id: String) -> Dictionary:
+	for station in stations:
+		var station_id_str: String = str(station["id"])
+		if station_id_str == station_id:
+			return station
+	return {}
+
+
+func get_station_npc_anchor(station: Dictionary, npc_index: int) -> Vector2:
+	var angle: float = NPC_ANCHOR_BASE_ANGLE + float(npc_index) * NPC_ANCHOR_ANGLE_STEP
+	var radius: float = 24.0 + float(npc_index % 2) * 8.0
+	var station_position: Vector2 = Vector2(station["position"])
+	return station_position + Vector2(cos(angle), sin(angle)) * radius
+
+
+func sync_npc_visuals() -> void:
+	for npc_index in range(npcs.size()):
+		var npc: Dictionary = npcs[npc_index]
+		var anchor_station_id: String = str(npc.get("anchor_station_id", npc.get("home_station_id", "")))
+		var anchor_station: Dictionary = get_station_by_id(anchor_station_id)
+		if anchor_station.is_empty() and not stations.is_empty():
+			anchor_station = stations[npc_index % stations.size()]
+			var fallback_id: String = str(anchor_station["id"])
+			npc["anchor_station_id"] = fallback_id
+			if not npc.has("home_station_id") or str(npc.get("home_station_id", "")).is_empty():
+				npc["home_station_id"] = fallback_id
+		if anchor_station.is_empty():
+			continue
+		npc["route_from_id"] = ""
+		npc["route_to_id"] = ""
+		npc["travel_progress"] = 1.0
+		npc["cargo_resource_id"] = ""
+		npc["visual_position"] = get_station_npc_anchor(anchor_station, npc_index)
+		npc["visual_rotation"] = 0.0
+
+
+func start_npc_visual_route(npc: Dictionary, npc_index: int, from: Dictionary, to: Dictionary, resource_id: String) -> void:
+	var start_pos: Vector2 = get_station_npc_anchor(from, npc_index)
+	var end_pos: Vector2 = get_station_npc_anchor(to, npc_index)
+	var distance: float = start_pos.distance_to(end_pos)
+	var from_id: String = str(from["id"])
+	var to_id: String = str(to["id"])
+	npc["anchor_station_id"] = to_id
+	npc["route_from_id"] = from_id
+	npc["route_to_id"] = to_id
+	npc["travel_progress"] = 0.0
+	npc["travel_time"] = clampf(distance / NPC_VISUAL_SPEED, NPC_VISUAL_MIN_TRAVEL, NPC_VISUAL_MAX_TRAVEL)
+	npc["visual_position"] = start_pos
+	npc["visual_rotation"] = (end_pos - start_pos).angle()
+	npc["cargo_resource_id"] = resource_id
+
+
+func update_npc_visuals(delta: float) -> void:
+	for npc_index in range(npcs.size()):
+		var npc: Dictionary = npcs[npc_index]
+		var route_from_id: String = str(npc.get("route_from_id", ""))
+		var route_to_id: String = str(npc.get("route_to_id", ""))
+		var travel_progress: float = float(npc.get("travel_progress", 1.0))
+
+		if not route_from_id.is_empty() and not route_to_id.is_empty() and travel_progress < 1.0:
+			var from_station: Dictionary = get_station_by_id(route_from_id)
+			var to_station: Dictionary = get_station_by_id(route_to_id)
+			if from_station.is_empty() or to_station.is_empty():
+				npc["route_from_id"] = ""
+				npc["route_to_id"] = ""
+				npc["travel_progress"] = 1.0
+				npc["cargo_resource_id"] = ""
+				continue
+
+			var travel_time: float = maxf(0.001, float(npc.get("travel_time", NPC_VISUAL_MIN_TRAVEL)))
+			travel_progress = minf(1.0, travel_progress + delta / travel_time)
+			var eased: float = travel_progress * travel_progress * (3.0 - 2.0 * travel_progress)
+			var start_pos: Vector2 = get_station_npc_anchor(from_station, npc_index)
+			var end_pos: Vector2 = get_station_npc_anchor(to_station, npc_index)
+			npc["visual_position"] = start_pos.lerp(end_pos, eased)
+			npc["visual_rotation"] = (end_pos - start_pos).angle()
+			npc["travel_progress"] = travel_progress
+
+			if travel_progress >= 1.0:
+				npc["route_from_id"] = ""
+				npc["route_to_id"] = ""
+				npc["cargo_resource_id"] = ""
+			continue
+
+		var anchor_station_id: String = str(npc.get("anchor_station_id", npc.get("home_station_id", "")))
+		var anchor_station: Dictionary = get_station_by_id(anchor_station_id)
+		if anchor_station.is_empty() and not stations.is_empty():
+			anchor_station = stations[npc_index % stations.size()]
+			npc["anchor_station_id"] = str(anchor_station["id"])
+		if anchor_station.is_empty():
+			continue
+		var anchor_pos: Vector2 = get_station_npc_anchor(anchor_station, npc_index)
+		var idle_phase: float = float(npc.get("idle_phase", 0.0))
+		var idle_angle: float = visual_time * NPC_IDLE_SPEED + idle_phase
+		var idle_offset: Vector2 = Vector2(cos(idle_angle), sin(idle_angle * NPC_IDLE_SWAY_RATIO)) * NPC_IDLE_RADIUS
+		npc["visual_position"] = anchor_pos + idle_offset
+		if idle_offset.length_squared() > 0.0001:
+			npc["visual_rotation"] = idle_offset.angle()
+
 # ─── Economy ──────────────────────────────────────────────────────────────────
 
 func tick_economy() -> void:
@@ -471,7 +602,8 @@ func tick_economy() -> void:
 func run_npc_trades() -> void:
 	if stations.size() < 2:
 		return
-	for npc in npcs:
+	for npc_index in range(npcs.size()):
+		var npc: Dictionary = npcs[npc_index]
 		if rng.randf() > npc["efficiency"]:
 			continue
 		var route = find_npc_route(npc)
@@ -488,8 +620,9 @@ func run_npc_trades() -> void:
 			continue
 		remove_from_inventory(from["inventory"], resource_id, amount)
 		add_to_inventory(to["inventory"], resource_id, amount)
+		start_npc_visual_route(npc, npc_index, from, to, resource_id)
 		var res: Dictionary = RESOURCES[resource_id]
-		add_trade_log("NPC %s: %d %s %s %s → %s" % [npc["name"], amount, res["icon"], res["display_name"], from["name"], to["name"]])
+		add_trade_log("NPC %s: %d [%s] %s %s → %s" % [npc["name"], amount, get_resource_short_label(resource_id), res["display_name"], from["name"], to["name"]])
 
 
 func find_npc_route(npc: Dictionary):
@@ -598,7 +731,7 @@ func attempt_trade(buy: bool) -> void:
 		remove_from_inventory(docking_station["inventory"], resource_id, amount)
 		add_to_inventory(player_inventory, resource_id, amount)
 		update_average_buy(resource_id, amount, price)
-		add_trade_log("Gekauft: %d %s %s @ %d von %s" % [amount, res["icon"], res["display_name"], price, docking_station["name"]])
+		add_trade_log("Gekauft: %d [%s] %s @ %d von %s" % [amount, get_resource_short_label(resource_id), res["display_name"], price, docking_station["name"]])
 		success_trade("Kauf erfolgreich.")
 		return
 
@@ -609,7 +742,7 @@ func attempt_trade(buy: bool) -> void:
 	credits += gain
 	remove_from_inventory(player_inventory, resource_id, amount)
 	add_to_inventory(docking_station["inventory"], resource_id, amount)
-	add_trade_log("Verkauft: %d %s %s @ %d an %s" % [amount, res["icon"], res["display_name"], sell_price, docking_station["name"]])
+	add_trade_log("Verkauft: %d [%s] %s @ %d an %s" % [amount, get_resource_short_label(resource_id), res["display_name"], sell_price, docking_station["name"]])
 	success_trade("Verkauf erfolgreich.")
 
 # ─── Drawing ──────────────────────────────────────────────────────────────────
@@ -648,13 +781,13 @@ func draw_station_node(station: Dictionary, index: int) -> void:
 
 
 func draw_npc_markers() -> void:
-	if stations.is_empty():
-		return
-	for i in range(npcs.size()):
-		var anchor: Dictionary = stations[i % stations.size()]
-		var marker_pos: Vector2 = anchor["position"] + Vector2(28.0 + 9.0 * i, -24.0 - 5.0 * i)
-		draw_circle(marker_pos, 4.0, NPC_MARKER_COLOR)
-		draw_string(ThemeDB.fallback_font, marker_pos + Vector2(8.0, 4.0), npcs[i]["name"], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 10)
+	for npc_index in range(npcs.size()):
+		var npc: Dictionary = npcs[npc_index]
+		var marker_pos: Vector2 = Vector2(npc["visual_position"])
+		var rotation: float = float(npc.get("visual_rotation", 0.0))
+		var cargo_resource_id: String = str(npc.get("cargo_resource_id", ""))
+		draw_npc_ship(marker_pos, rotation, cargo_resource_id)
+		draw_string(ThemeDB.fallback_font, marker_pos + Vector2(10.0, 4.0), npc["name"], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 10)
 
 
 func draw_ship() -> void:
@@ -779,6 +912,11 @@ func draw_trade_panel(rect: Rect2, station: Dictionary) -> void:
 	var total_sell := sell * quantity
 	var expected := calc_expected_profit(selected_resource_id, quantity, sell)
 	var res: Dictionary = RESOURCES[selected_resource_id]
+	var preview_rect := Rect2(rect.position + Vector2(rect.size.x - 42.0, 42.0), Vector2(28.0, 28.0))
+
+	draw_rect(preview_rect, ICON_BG_COLOR, true)
+	draw_rect(preview_rect, TIER_BORDER_COLOR[res["tier"]], false, 2.0)
+	draw_resource_icon(preview_rect, selected_resource_id)
 
 	draw_string(ThemeDB.fallback_font, rect.position + Vector2(12.0, 48.0), "Ressource: %s" % res["display_name"], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 14)
 	draw_string(ThemeDB.fallback_font, rect.position + Vector2(12.0, 70.0), "Menge: %d" % quantity, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 13)
@@ -832,36 +970,94 @@ func draw_toast() -> void:
 
 func draw_resource_icon(icon_rect: Rect2, resource_id: String) -> void:
 	var center: Vector2 = icon_rect.get_center()
+	var resource_color: Color = get_resource_color(resource_id)
+	var glow_rect: Rect2 = Rect2(icon_rect.position + Vector2(1.0, 1.0), icon_rect.size - Vector2(2.0, 2.0))
+	draw_rect(glow_rect, resource_color.darkened(0.72), true)
+	draw_rect(glow_rect, resource_color.lightened(0.12), false, 1.0)
 	match resource_id:
 		"wood":
-			var top_plank := Rect2(icon_rect.position + Vector2(4.0, 5.0), Vector2(12.0, 4.0))
-			var bottom_plank := Rect2(icon_rect.position + Vector2(4.0, 11.0), Vector2(12.0, 4.0))
-			draw_rect(top_plank, Color(0.74, 0.5, 0.22), true)
+			var top_plank := Rect2(icon_rect.position + Vector2(3.0, 3.0), Vector2(icon_rect.size.x - 6.0, 4.0))
+			var mid_plank := Rect2(icon_rect.position + Vector2(4.0, 8.0), Vector2(icon_rect.size.x - 8.0, 4.0))
+			var bottom_plank := Rect2(icon_rect.position + Vector2(3.0, 13.0), Vector2(icon_rect.size.x - 6.0, 4.0))
+			draw_rect(top_plank, Color(0.86, 0.6, 0.28), true)
+			draw_rect(mid_plank, Color(0.74, 0.48, 0.2), true)
 			draw_rect(bottom_plank, Color(0.58, 0.37, 0.16), true)
+			draw_line(icon_rect.position + Vector2(7.0, 3.0), icon_rect.position + Vector2(7.0, 17.0), Color(0.97, 0.84, 0.62, 0.9), 1.0)
+			draw_line(icon_rect.position + Vector2(13.0, 3.0), icon_rect.position + Vector2(13.0, 17.0), Color(0.97, 0.84, 0.62, 0.85), 1.0)
 		"coal":
-			draw_circle(center + Vector2(-3.0, 2.0), 4.0, Color(0.25, 0.27, 0.31))
-			draw_circle(center + Vector2(2.0, -1.0), 4.2, Color(0.15, 0.17, 0.22))
-			draw_circle(center + Vector2(4.0, 4.0), 3.0, Color(0.35, 0.37, 0.42))
+			draw_circle(center + Vector2(-3.2, 2.4), 4.2, Color(0.31, 0.34, 0.4))
+			draw_circle(center + Vector2(2.0, -0.8), 4.4, Color(0.12, 0.15, 0.21))
+			draw_circle(center + Vector2(4.4, 4.2), 3.1, Color(0.41, 0.45, 0.52))
+			draw_circle(center + Vector2(-0.5, -3.8), 2.3, Color(0.72, 0.78, 0.92, 0.45))
 		"copper_plate":
-			var plate := Rect2(icon_rect.position + Vector2(4.0, 5.0), Vector2(12.0, 10.0))
-			draw_rect(plate, Color(0.84, 0.47, 0.19), true)
+			var plate := Rect2(icon_rect.position + Vector2(3.0, 4.0), Vector2(14.0, 10.0))
+			draw_rect(plate, Color(0.9, 0.52, 0.23), true)
 			draw_rect(plate, Color(1.0, 0.75, 0.42), false, 1.0)
-			draw_line(plate.position + Vector2(0.0, 5.0), plate.position + Vector2(12.0, 5.0), Color(1.0, 0.7, 0.3), 1.0)
+			draw_line(plate.position + Vector2(0.0, 5.0), plate.position + Vector2(14.0, 5.0), Color(1.0, 0.7, 0.3), 1.0)
+			draw_circle(plate.position + Vector2(3.0, 2.0), 0.9, Color(1.0, 0.88, 0.64))
+			draw_circle(plate.position + Vector2(11.0, 8.0), 0.9, Color(1.0, 0.88, 0.64))
 		"plastic":
 			var points := PackedVector2Array([
-				center + Vector2(0.0, -6.0),
-				center + Vector2(5.2, -3.0),
-				center + Vector2(5.2, 3.0),
-				center + Vector2(0.0, 6.0),
-				center + Vector2(-5.2, 3.0),
-				center + Vector2(-5.2, -3.0)
+				center + Vector2(0.0, -6.4),
+				center + Vector2(5.8, -3.2),
+				center + Vector2(5.8, 3.2),
+				center + Vector2(0.0, 6.4),
+				center + Vector2(-5.8, 3.2),
+				center + Vector2(-5.8, -3.2)
 			])
 			var outline := PackedVector2Array(points)
 			outline.append(points[0])
 			draw_colored_polygon(points, Color(0.42, 0.9, 1.0))
 			draw_polyline(outline, Color(0.9, 0.98, 1.0), 1.2)
+			draw_line(center + Vector2(-2.8, -1.0), center + Vector2(2.8, 1.0), Color(0.96, 1.0, 1.0, 0.9), 1.0)
 		_:
-			draw_circle(center, 5.0, Color(0.85, 0.88, 0.94))
+			draw_circle(center, 5.8, resource_color)
+	draw_string(ThemeDB.fallback_font, icon_rect.position + Vector2(3.0, icon_rect.size.y - 2.5), get_resource_short_label(resource_id), HORIZONTAL_ALIGNMENT_LEFT, -1.0, 7, Color(0.96, 0.98, 1.0))
+
+
+func draw_npc_ship(marker_pos: Vector2, rotation: float, cargo_resource_id: String) -> void:
+	var forward: Vector2 = Vector2.RIGHT.rotated(rotation)
+	var side: Vector2 = forward.rotated(PI * 0.5)
+	var nose: Vector2 = marker_pos + forward * 7.0
+	var left: Vector2 = marker_pos - forward * 4.8 + side * 4.2
+	var right: Vector2 = marker_pos - forward * 4.8 - side * 4.2
+	var hull: PackedVector2Array = PackedVector2Array([nose, left, marker_pos - forward * 2.2, right])
+	var outline: PackedVector2Array = PackedVector2Array([nose, left, marker_pos - forward * 2.2, right, nose])
+	draw_colored_polygon(hull, NPC_MARKER_COLOR)
+	draw_polyline(outline, Color(0.96, 0.99, 1.0, 0.95), 1.2)
+	draw_circle(marker_pos - forward * 1.0, 1.5, Color(0.08, 0.14, 0.22, 0.95))
+	if not cargo_resource_id.is_empty():
+		var cargo_color: Color = get_resource_color(cargo_resource_id)
+		draw_circle(marker_pos + side * 5.0, 2.0, cargo_color)
+		draw_circle(marker_pos + side * 5.0, 0.85, Color(0.98, 0.99, 1.0, 0.95))
+
+
+func get_resource_short_label(resource_id: String) -> String:
+	match resource_id:
+		"wood":
+			return "WD"
+		"coal":
+			return "CO"
+		"copper_plate":
+			return "CU"
+		"plastic":
+			return "PL"
+		_:
+			return "??"
+
+
+func get_resource_color(resource_id: String) -> Color:
+	match resource_id:
+		"wood":
+			return Color(0.82, 0.58, 0.27)
+		"coal":
+			return Color(0.46, 0.5, 0.58)
+		"copper_plate":
+			return Color(0.96, 0.6, 0.28)
+		"plastic":
+			return Color(0.38, 0.9, 1.0)
+		_:
+			return Color(0.78, 0.84, 0.96)
 
 
 func register_control_rect(control_id: String, rect: Rect2) -> void:
@@ -1341,6 +1537,7 @@ func load_state() -> void:
 	var sk: String = str(data.get("sort_key", "value"))
 	sort_key = sk if SORT_KEYS.has(sk) else "value"
 	sort_ascending = bool(data.get("sort_ascending", false))
+	sync_npc_visuals()
 
 
 func _save_inventory(inventory: Dictionary) -> Dictionary:
