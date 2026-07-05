@@ -504,6 +504,10 @@ func sync_npc_visuals() -> void:
 		var anchor_station: Dictionary = get_station_by_id(anchor_station_id)
 		if anchor_station.is_empty() and not stations.is_empty():
 			anchor_station = stations[npc_index % stations.size()]
+			var fallback_id: String = str(anchor_station["id"])
+			npc["anchor_station_id"] = fallback_id
+			if not npc.has("home_station_id") or str(npc.get("home_station_id", "")).is_empty():
+				npc["home_station_id"] = fallback_id
 		if anchor_station.is_empty():
 			continue
 		npc["route_from_id"] = ""
