@@ -1386,12 +1386,13 @@ func get_all_resource_rows(inventory: Dictionary, station: Dictionary, buy_price
 		if not search.is_empty() and not str(res["display_name"]).to_lower().contains(search.to_lower()):
 			continue
 		var unit: int = get_station_buy_price(station, resource_id) if buy_prices else get_station_sell_price(station, resource_id)
+		var vol: int = int(res["volume_per_unit"])
 		rows.append({
 			"resource_id": resource_id,
 			"amount": amount,
 			"unit_price": unit,
 			"total_value": amount * unit,
-			"total_volume": amount * int(res["volume_per_unit"])
+			"total_volume": amount * vol
 		})
 	rows.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 		var cmp := _compare_rows(a, b)
