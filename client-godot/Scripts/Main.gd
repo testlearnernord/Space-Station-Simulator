@@ -525,9 +525,10 @@ func sync_npc_visuals() -> void:
 
 
 func start_npc_visual_route(npc: Dictionary, npc_index: int, from: Dictionary, to: Dictionary, resource_id: String) -> void:
-	var start_pos: Vector2 = get_station_npc_anchor(from, npc_index)
+	# Use the NPC's current visual position as the start so it never teleports.
+	var cur_pos: Vector2 = Vector2(npc.get("visual_position", get_station_npc_anchor(from, npc_index)))
 	var end_pos: Vector2 = get_station_npc_anchor(to, npc_index)
-	var distance: float = start_pos.distance_to(end_pos)
+	var distance: float = cur_pos.distance_to(end_pos)
 	var from_id: String = str(from["id"])
 	var to_id: String = str(to["id"])
 	npc["anchor_station_id"] = to_id
@@ -535,8 +536,8 @@ func start_npc_visual_route(npc: Dictionary, npc_index: int, from: Dictionary, t
 	npc["route_to_id"] = to_id
 	npc["travel_progress"] = 0.0
 	npc["travel_time"] = clampf(distance / NPC_VISUAL_SPEED, NPC_VISUAL_MIN_TRAVEL, NPC_VISUAL_MAX_TRAVEL)
-	npc["visual_position"] = start_pos
-	npc["visual_rotation"] = (end_pos - start_pos).angle()
+	npc["route_start_pos"] = cur_pos
+	npc["visual_rotation"] = (end_pos - cur_pos).angle()
 	npc["cargo_resource_id"] = resource_id
 
 
@@ -560,7 +561,9 @@ func update_npc_visuals(delta: float) -> void:
 			var travel_time: float = maxf(0.001, float(npc.get("travel_time", NPC_VISUAL_MIN_TRAVEL)))
 			travel_progress = minf(1.0, travel_progress + delta / travel_time)
 			var eased: float = travel_progress * travel_progress * (3.0 - 2.0 * travel_progress)
-			var start_pos: Vector2 = get_station_npc_anchor(from_station, npc_index)
+			# Use the stored route_start_pos so the NPC travels from where it
+			# actually was when the route began, avoiding visual teleportation.
+			var start_pos: Vector2 = Vector2(npc.get("route_start_pos", get_station_npc_anchor(from_station, npc_index)))
 			var end_pos: Vector2 = get_station_npc_anchor(to_station, npc_index)
 			npc["visual_position"] = start_pos.lerp(end_pos, eased)
 			npc["visual_rotation"] = (end_pos - start_pos).angle()
@@ -931,15 +934,13 @@ func draw_player_panel(rect: Rect2, station: Dictionary) -> void:
 	draw_string(ThemeDB.fallback_font, sort_rect.position + Vector2(6.0, 15.0), "Sort: %s" % sort_label(sort_key), HORIZONTAL_ALIGNMENT_LEFT, -1.0, 12)
 	draw_string(ThemeDB.fallback_font, dir_rect.position + Vector2(6.0, 15.0), "Dir: %s" % ("Auf" if sort_ascending else "Ab"), HORIZONTAL_ALIGNMENT_LEFT, -1.0, 12)
 
-	var rows := get_rows(player_agent["inventory"], station, false)
-	var start_y := rect.position.y + 146.0
-
-	if rows.is_empty():
-		draw_string(ThemeDB.fallback_font, rect.position + Vector2(12.0, start_y + 26.0), "Leeres Inventar. Kaufe Waren an Stationen.", HORIZONTAL_ALIGNMENT_LEFT, -1.0, 13)
-		return
+	# Always show all resources so the player can see every cargo slot and
+	# select any resource for trading even when carrying nothing.
+	var rows: Array = get_all_resource_rows(player_agent["inventory"], station, false)
+	var start_y: float = rect.position.y + 146.0
 
 	for i in range(mini(rows.size(), 7)):
-		var row_rect: Rect2 = Rect2(Vector2(rect.position.x + 10.0, start_y + i * 28.0), Vector2(rect.size.x - 20.0, 24.0))
+		var row_rect: Rect2 = Rect2(Vector2(rect.position.x + 10.0, start_y + float(i) * 28.0), Vector2(rect.size.x - 20.0, 24.0))
 		draw_row(rows[i], row_rect, false, station)
 
 
@@ -947,12 +948,10 @@ func draw_station_panel(rect: Rect2, station: Dictionary) -> void:
 	draw_string(ThemeDB.fallback_font, rect.position + Vector2(12.0, 48.0), "Lager: %d / %d" % [get_used_capacity(station["inventory"]), station["inventory"]["capacity"]], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 13)
 	draw_string(ThemeDB.fallback_font, rect.position + Vector2(12.0, 68.0), "Ziel: ausgeglichener Warenmix", HORIZONTAL_ALIGNMENT_LEFT, -1.0, 12)
 
-	var rows := get_rows(station["inventory"], station, true)
-	var start_y := rect.position.y + 92.0
-
-	if rows.is_empty():
-		draw_string(ThemeDB.fallback_font, rect.position + Vector2(12.0, start_y + 22.0), "Stationlager ist aktuell leer.", HORIZONTAL_ALIGNMENT_LEFT, -1.0, 13)
-		return
+	# Always show all resources so the player can select and inspect any
+	# tradeable good, including those temporarily out of stock.
+	var rows: Array = get_all_resource_rows(station["inventory"], station, true)
+	var start_y: float = rect.position.y + 92.0
 
 	for i in range(mini(rows.size(), 8)):
 		var row_rect: Rect2 = Rect2(Vector2(rect.position.x + 10.0, start_y + i * 28.0), Vector2(rect.size.x - 20.0, 24.0))
@@ -964,25 +963,35 @@ func draw_row(row: Dictionary, rect: Rect2, station_row: bool, station: Dictiona
 	var res: Dictionary = RESOURCES[resource_id]
 	var selected: bool = selected_resource_id == resource_id
 	var control_id: String = "resource:%s" % resource_id
+	var is_empty: bool = int(row["amount"]) <= 0
 	var bg_color: Color = ROW_SELECTED_BG if selected else ROW_DEFAULT_BG
 	if is_control_hovered(control_id):
 		bg_color = ROW_HOVER_BG if not selected else ROW_SELECTED_BG.lightened(0.12)
 	if is_control_active(control_id):
 		bg_color = ROW_PRESS_BG
+	# Dim empty slots so they are visually distinguishable but still clickable.
+	if is_empty and not selected:
+		bg_color = bg_color.darkened(0.35)
 
 	draw_rect(rect, bg_color, true)
 	draw_rect(rect, PANEL_BORDER if selected else ROW_DEFAULT_BORDER, false, 1.0)
 
-	var icon_rect := Rect2(rect.position + Vector2(3.0, 2.0), Vector2(20.0, 20.0))
+	var icon_rect: Rect2 = Rect2(rect.position + Vector2(3.0, 2.0), Vector2(20.0, 20.0))
 	draw_rect(icon_rect, ICON_BG_COLOR, true)
-	draw_rect(icon_rect, TIER_BORDER_COLOR[res["tier"]], false, 2.0)
+	draw_rect(icon_rect, TIER_BORDER_COLOR[int(res["tier"])], false, 2.0)
 	draw_resource_icon(icon_rect, resource_id)
 
-	draw_string(ThemeDB.fallback_font, rect.position + Vector2(28.0, 14.0), "%s T%d" % [res["display_name"], res["tier"]], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 12)
-	draw_string(ThemeDB.fallback_font, rect.position + Vector2(28.0, 23.0), "Menge:%d Wert:%d Vol:%d" % [row["amount"], row["total_value"], row["total_volume"]], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 10)
-
-	if station_row:
-		draw_string(ThemeDB.fallback_font, rect.position + Vector2(rect.size.x - STOCK_STATE_OFFSET, 14.0), get_stock_state(station, resource_id), HORIZONTAL_ALIGNMENT_LEFT, -1.0, 10, STOCK_STATE_COLOR)
+	var text_color: Color = Color(0.7, 0.7, 0.7) if is_empty else Color.WHITE
+	draw_string(ThemeDB.fallback_font, rect.position + Vector2(28.0, 14.0), "%s T%d" % [str(res["display_name"]), int(res["tier"])], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 12, text_color)
+	if is_empty:
+		# Show price info even for empty slots so the player can evaluate trades.
+		var unit_price: int = int(row["unit_price"])
+		var label: String = "Ausverkauft · %d cr/St" % unit_price if station_row else "Kein Bestand · %d cr/St" % unit_price
+		draw_string(ThemeDB.fallback_font, rect.position + Vector2(28.0, 23.0), label, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 10, text_color)
+	else:
+		draw_string(ThemeDB.fallback_font, rect.position + Vector2(28.0, 23.0), "Menge:%d Wert:%d Vol:%d" % [int(row["amount"]), int(row["total_value"]), int(row["total_volume"])], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 10)
+		if station_row:
+			draw_string(ThemeDB.fallback_font, rect.position + Vector2(rect.size.x - STOCK_STATE_OFFSET, 14.0), get_stock_state(station, resource_id), HORIZONTAL_ALIGNMENT_LEFT, -1.0, 10, STOCK_STATE_COLOR)
 
 	register_control_rect(control_id, rect)
 
@@ -1359,6 +1368,30 @@ func get_rows(inventory: Dictionary, station: Dictionary, buy_prices: bool) -> A
 			"unit_price": unit,
 			"total_value": amount * unit,
 			"total_volume": amount * res["volume_per_unit"]
+		})
+	rows.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		var cmp := _compare_rows(a, b)
+		return cmp < 0 if sort_ascending else cmp > 0
+	)
+	return rows
+
+
+# Like get_rows but always includes every resource, even those with zero stock/cargo.
+# Used by both panels so the player can always select any resource.
+func get_all_resource_rows(inventory: Dictionary, station: Dictionary, buy_prices: bool) -> Array:
+	var rows: Array = []
+	for resource_id in RESOURCE_IDS:
+		var amount: int = get_inventory_amount(inventory, resource_id)
+		var res: Dictionary = RESOURCES[resource_id]
+		if not search.is_empty() and not str(res["display_name"]).to_lower().contains(search.to_lower()):
+			continue
+		var unit: int = get_station_buy_price(station, resource_id) if buy_prices else get_station_sell_price(station, resource_id)
+		rows.append({
+			"resource_id": resource_id,
+			"amount": amount,
+			"unit_price": unit,
+			"total_value": amount * unit,
+			"total_volume": amount * int(res["volume_per_unit"])
 		})
 	rows.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 		var cmp := _compare_rows(a, b)
