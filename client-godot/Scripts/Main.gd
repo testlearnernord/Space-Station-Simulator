@@ -670,7 +670,7 @@ func find_npc_route(npc: Dictionary):
 	var npc_credits: int = int(npc.get("credits", 0))
 	var npc_inv: Dictionary = npc.get("inventory", {})
 	var npc_free: int = get_available_capacity(npc_inv) if not npc_inv.is_empty() else int(npc.get("cargo_capacity", 20))
-	var best_score: float = 0.0
+	var best_trade_score: float = 0.0
 	var best = null
 	for resource_id in RESOURCE_IDS:
 		var vol: int = int(RESOURCES[resource_id]["volume_per_unit"])
@@ -696,9 +696,9 @@ func find_npc_route(npc: Dictionary):
 				if amount <= 0:
 					continue
 				var expected: float = (unit_profit + rebalance_bonus_per_unit) * float(amount)
-				if expected <= best_score:
+				if expected <= best_trade_score:
 					continue
-				best_score = expected
+				best_trade_score = expected
 				best = {"resource_id": resource_id, "from": from, "to": to, "amount": amount}
 	return best
 
@@ -734,7 +734,8 @@ func get_stock_state(station: Dictionary, resource_id: String) -> String:
 
 
 func get_stock_ratio(station: Dictionary, resource_id: String) -> float:
-	var target: int = maxi(1, int(station["target_stock"][resource_id]))
+	var target_stock: Dictionary = station.get("target_stock", {})
+	var target: int = maxi(1, int(target_stock.get(resource_id, 1)))
 	var current: int = get_inventory_amount(station["inventory"], resource_id)
 	return float(current) / float(target)
 
@@ -882,7 +883,7 @@ func draw_background() -> void:
 func draw_station_node(station: Dictionary, index: int) -> void:
 	var pulse := 0.84 + 0.16 * sin(visual_time * 1.4 + float(index))
 	var radius := 22.0 + 2.5 * sin(visual_time + float(index))
-	var station_pos: Vector2 = Vector2(station["position"])
+	var station_pos: Vector2 = Vector2(station.get("position", Vector2.ZERO))
 	draw_circle(station_pos, radius, STATION_COLOR * pulse)
 
 	if index % 2 == 0:
