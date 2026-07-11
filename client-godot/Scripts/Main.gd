@@ -405,12 +405,12 @@ func reset_run() -> void:
 func delete_save_file() -> bool:
 	if not FileAccess.file_exists(SAVE_PATH):
 		return true
-	var save_dir: DirAccess = DirAccess.open(SAVE_DIRECTORY)
-	if save_dir == null:
+	var save_directory: DirAccess = DirAccess.open(SAVE_DIRECTORY)
+	if save_directory == null:
 		push_warning("Reset failed: could not access save directory at %s" % SAVE_DIRECTORY)
 		return false
-	var err: Error = save_dir.remove(SAVE_FILE_NAME)
-	if err != OK:
+	var remove_error: Error = save_directory.remove(SAVE_FILE_NAME)
+	if remove_error != OK:
 		push_warning("Reset failed: could not delete save file at %s" % SAVE_PATH)
 		return false
 	return true
