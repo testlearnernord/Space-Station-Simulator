@@ -24,6 +24,7 @@ Single-player space-station management simulator with economic simulation, trade
 - **Shift (hold)** - Boost thrusters
 - **C (hold near station)** - Magnetic docking sequence with auto-alignment
 - **Left Click (while docked)** - Trade cargo at your docked station
+- **F8** - Reset the current run and delete the save
 - **Goal** - Reach **2000 credits** by buying low and selling high
 
 ## Build Instructions

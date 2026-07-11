@@ -3,9 +3,15 @@ extends Node2D
 # ─── Constants ────────────────────────────────────────────────────────────────
 
 const SAVE_VERSION := 2
-const SAVE_PATH := "user://savegame.json"
+const SAVE_DIRECTORY := "user://"
+const SAVE_FILE_NAME := "savegame.json"
+const SAVE_PATH := SAVE_DIRECTORY + SAVE_FILE_NAME
 const DEFAULT_RESOURCE_ID := "wood"
 const CARGO_CAPACITY := 32
+const RESET_HOTKEY := KEY_F8
+const RESET_HOTKEY_LABEL := "F8"
+const DEFAULT_PLAYER_POSITION := Vector2(130, 120)
+const DEFAULT_STATUS := "Fly with WASD, hold C near station to dock. Press %s to reset the run." % RESET_HOTKEY_LABEL
 
 const ACCELERATION := 520.0
 const DRAG := 360.0
@@ -138,7 +144,7 @@ var avg_buy_price: Dictionary = {}
 var trade_log: Array = []
 var stars: Array = []
 
-var player_position := Vector2(130, 120)
+var player_position := DEFAULT_PLAYER_POSITION
 var player_velocity := Vector2.ZERO
 var player_rotation := 0.0
 var is_docked := false
@@ -153,7 +159,7 @@ var npc_accumulator := 0.0
 var save_accumulator := 0.0
 var visual_time := 0.0
 
-var status := "Fly with WASD, hold C near station to dock."
+var status := DEFAULT_STATUS
 var sort_key := "value"
 var sort_ascending := false
 var search := ""
@@ -280,6 +286,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		prime_audio()
 
 	if event is InputEventKey and event.pressed and not event.echo:
+		var keycode: int = int(event.keycode)
+		if keycode == RESET_HOTKEY:
+			reset_run()
+			return
 		prime_audio()
 
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
@@ -354,6 +364,56 @@ func setup_defaults() -> void:
 	npcs.append(create_npc("Bulk Hauler", 28, 0.82, 1))
 	npcs.append(create_npc("Opportunist", 18, 0.55, 2))
 	sync_npc_visuals()
+
+
+func reset_run() -> void:
+	var save_deleted: bool = delete_save_file()
+	rng.seed = DEFAULT_RNG_SEED
+	setup_defaults()
+	stars.clear()
+	generate_starfield()
+	player_position = DEFAULT_PLAYER_POSITION
+	player_velocity = Vector2.ZERO
+	player_rotation = 0.0
+	is_docked = false
+	docking_station = null
+	docking_progress = 0.0
+	was_dock_held = false
+	goal_reached = false
+	has_own_station = false
+	economy_accumulator = 0.0
+	npc_accumulator = 0.0
+	save_accumulator = 0.0
+	visual_time = 0.0
+	trade_log.clear()
+	sort_key = "value"
+	sort_ascending = false
+	search = ""
+	selected_resource_id = DEFAULT_RESOURCE_ID
+	quantity = 1
+	toast_text = "Run reset. Save deleted." if save_deleted else "Run reset complete. Warning: save file deletion failed (check console)."
+	toast_timer = 2.5
+	last_trade_failed = false
+	hovered_control_id = ""
+	feedback_control_id = ""
+	feedback_timer = 0.0
+	status = DEFAULT_STATUS
+	ensure_resource_selected()
+	update_hud()
+
+
+func delete_save_file() -> bool:
+	if not FileAccess.file_exists(SAVE_PATH):
+		return true
+	var save_directory: DirAccess = DirAccess.open(SAVE_DIRECTORY)
+	if save_directory == null:
+		push_warning("Reset failed: could not access save directory at %s" % SAVE_DIRECTORY)
+		return false
+	var remove_error: Error = save_directory.remove(SAVE_FILE_NAME)
+	if remove_error != OK:
+		push_warning("Reset failed: could not delete save file at %s" % SAVE_PATH)
+		return false
+	return true
 
 
 func create_station(id: String, sname: String, position: Vector2, type_id: String, distance: float, event_mod: float) -> Dictionary:
@@ -1630,7 +1690,7 @@ func load_state() -> void:
 
 	player_agent["credits"] = maxi(0, int(data.get("credits", 600)))
 	var pp = data.get("player_position", {"x": 130, "y": 120})
-	player_position = Vector2(float(pp.get("x", 130)), float(pp.get("y", 120)))
+	player_position = Vector2(float(pp.get("x", DEFAULT_PLAYER_POSITION.x)), float(pp.get("y", DEFAULT_PLAYER_POSITION.y)))
 	_restore_inventory(player_agent["inventory"], data.get("player_inventory", {}), CARGO_CAPACITY)
 
 	avg_buy_price.clear()
