@@ -686,6 +686,7 @@ func find_npc_route(npc: Dictionary):
 				var rebalance_gap: float = maxf(0.0, from_ratio - to_ratio)
 				# Encourage moving goods from surplus -> shortage even when pure arbitrage is weak.
 				var rebalance_bonus_per_unit: float = rebalance_gap * NPC_REBALANCE_BONUS_FACTOR
+				# Allow a slightly negative route only if rebalancing impact is strong enough.
 				if unit_profit < 0.0 and rebalance_bonus_per_unit < NPC_REBALANCE_ALLOW_NEGATIVE_THRESHOLD:
 					continue
 				var max_amount: int = mini(get_inventory_amount(from["inventory"], resource_id), npc_free / vol)
@@ -743,7 +744,7 @@ func get_stock_ratio(station: Dictionary, resource_id: String) -> float:
 func get_station_primary_resource_id(station: Dictionary) -> String:
 	var stype: Dictionary = STATION_TYPES[station["type_id"]]
 	var production: Dictionary = stype["production"]
-	var best_resource_id: String = ""
+	var best_resource_id: String = DEFAULT_RESOURCE_ID
 	var best_production: int = -1
 	for resource_id in RESOURCE_IDS:
 		var produced: int = int(production.get(resource_id, 0))
@@ -759,7 +760,7 @@ func get_station_primary_resource_id(station: Dictionary) -> String:
 		if ratio > best_ratio:
 			best_ratio = ratio
 			best_resource_id = resource_id
-	return best_resource_id if not best_resource_id.is_empty() else DEFAULT_RESOURCE_ID
+	return best_resource_id
 
 # ─── Trade ────────────────────────────────────────────────────────────────────
 
