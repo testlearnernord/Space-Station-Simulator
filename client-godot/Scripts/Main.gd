@@ -305,7 +305,12 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event.keycode == KEY_ESCAPE:
 		search = ""
 	elif event.unicode > 31 and event.unicode < 127:
-		search += char(event.unicode).to_lower()
+		var is_movement_key: bool = InputMap.event_is_action(event, "move_left") or \
+				InputMap.event_is_action(event, "move_right") or \
+				InputMap.event_is_action(event, "move_up") or \
+				InputMap.event_is_action(event, "move_down")
+		if not is_movement_key:
+			search += char(event.unicode).to_lower()
 
 
 func _draw() -> void:
@@ -668,7 +673,7 @@ func find_npc_route(npc: Dictionary):
 	var npc_credits: int = int(npc.get("credits", 0))
 	var npc_inv: Dictionary = npc.get("inventory", {})
 	var npc_free: int = get_available_capacity(npc_inv) if not npc_inv.is_empty() else int(npc.get("cargo_capacity", 20))
-	var best_profit := 0.0
+	var best_trade_score: float = 0.0
 	var best = null
 	for resource_id in RESOURCE_IDS:
 		var vol: int = int(RESOURCES[resource_id]["volume_per_unit"])
@@ -688,10 +693,10 @@ func find_npc_route(npc: Dictionary):
 				var amount: int = maxi(0, int(round(float(max_amount) * rng.randf_range(NPC_MIN_TRADE_RATIO, NPC_MAX_TRADE_RATIO))))
 				if amount <= 0:
 					continue
-				var expected: float = unit_profit * float(amount)
-				if expected <= best_profit:
+				var trade_score: float = unit_profit * float(amount)
+				if trade_score <= best_trade_score:
 					continue
-				best_profit = expected
+				best_trade_score = trade_score
 				best = {"resource_id": resource_id, "from": from, "to": to, "amount": amount}
 	return best
 
@@ -724,6 +729,14 @@ func get_stock_state(station: Dictionary, resource_id: String) -> String:
 	if ratio < LOW_STOCK_RATIO: return "Knapp"
 	if ratio > OVERSTOCK_RATIO: return "Überschuss"
 	return "Stabil"
+
+
+func get_stock_ratio(station: Dictionary, resource_id: String) -> float:
+	var target_stock: Dictionary = station.get("target_stock", {})
+	var target: int = maxi(1, int(target_stock.get(resource_id, 1)))
+	var current: int = get_inventory_amount(station["inventory"], resource_id)
+	return float(current) / float(target)
+
 
 # ─── Trade ────────────────────────────────────────────────────────────────────
 
@@ -847,21 +860,23 @@ func draw_background() -> void:
 func draw_station_node(station: Dictionary, index: int) -> void:
 	var pulse := 0.84 + 0.16 * sin(visual_time * 1.4 + float(index))
 	var radius := 22.0 + 2.5 * sin(visual_time + float(index))
-	draw_circle(station["position"], radius, STATION_COLOR * pulse)
+	var station_pos: Vector2 = Vector2(station["position"])
+	draw_circle(station_pos, radius, STATION_COLOR * pulse)
 
 	if index % 2 == 0:
-		draw_arc(station["position"], radius + 8.0, 0.0, TAU, 48, Color(0.55, 0.9, 1.0, 0.65), 2.5)
+		draw_arc(station_pos, radius + 8.0, 0.0, TAU, 48, Color(0.55, 0.9, 1.0, 0.65), 2.5)
 	else:
-		draw_arc(station["position"], radius + 9.0, visual_time * 0.2, visual_time * 0.2 + TAU, 24, Color(0.7, 0.9, 1.0, 0.7), 2.4)
+		draw_arc(station_pos, radius + 9.0, visual_time * 0.2, visual_time * 0.2 + TAU, 24, Color(0.7, 0.9, 1.0, 0.7), 2.4)
 
 	var focus := selected_resource_id if RESOURCES.has(selected_resource_id) else DEFAULT_RESOURCE_ID
-	draw_string(ThemeDB.fallback_font, station["position"] + Vector2(-64.0, -34.0), station["name"], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 14)
-	draw_string(ThemeDB.fallback_font, station["position"] + Vector2(-64.0, 46.0),
+
+	draw_string(ThemeDB.fallback_font, station_pos + Vector2(-64.0, -34.0), station["name"], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 14)
+	draw_string(ThemeDB.fallback_font, station_pos + Vector2(-64.0, 46.0),
 		"Buy %d / Sell %d" % [get_station_buy_price(station, focus), get_station_sell_price(station, focus)],
 		HORIZONTAL_ALIGNMENT_LEFT, -1.0, 13)
 
 	var dock_point := get_dock_point(station)
-	draw_line(station["position"], dock_point, Color(0.6, 0.95, 1.0, 0.7), 2.0)
+	draw_line(station_pos, dock_point, Color(0.6, 0.95, 1.0, 0.7), 2.0)
 	draw_circle(dock_point, 5.0, Color(0.8, 1.0, 1.0, 0.8))
 
 
