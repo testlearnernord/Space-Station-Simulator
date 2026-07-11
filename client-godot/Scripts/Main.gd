@@ -883,7 +883,7 @@ func draw_background() -> void:
 func draw_station_node(station: Dictionary, index: int) -> void:
 	var pulse := 0.84 + 0.16 * sin(visual_time * 1.4 + float(index))
 	var radius := 22.0 + 2.5 * sin(visual_time + float(index))
-	var station_pos: Vector2 = Vector2(station.get("position", Vector2.ZERO))
+	var station_pos: Vector2 = Vector2(station["position"])
 	draw_circle(station_pos, radius, STATION_COLOR * pulse)
 
 	if index % 2 == 0:
