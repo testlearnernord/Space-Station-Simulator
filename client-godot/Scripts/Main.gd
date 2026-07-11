@@ -390,7 +390,7 @@ func reset_run() -> void:
 	search = ""
 	selected_resource_id = DEFAULT_RESOURCE_ID
 	quantity = 1
-	toast_text = "Run reset. Save deleted." if save_deleted else "Run reset. Save file could not be deleted."
+	toast_text = "Run reset. Save deleted." if save_deleted else "Run reset complete. Warning: save file could not be deleted."
 	toast_timer = 2.5
 	last_trade_failed = false
 	hovered_control_id = ""
@@ -408,8 +408,8 @@ func delete_save_file() -> bool:
 	if save_dir == null:
 		push_warning("Reset failed: could not open save directory")
 		return false
-	var remove_result: Error = save_dir.remove(SAVE_FILE_NAME)
-	if remove_result != OK:
+	var err: Error = save_dir.remove(SAVE_FILE_NAME)
+	if err != OK:
 		push_warning("Reset failed: could not delete save file")
 		return false
 	return true
