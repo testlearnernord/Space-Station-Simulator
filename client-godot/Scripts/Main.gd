@@ -33,8 +33,6 @@ const MIN_INITIAL_STOCK := 2
 const MAX_INITIAL_STOCK_BONUS := 12
 const NPC_MIN_TRADE_RATIO := 0.35
 const NPC_MAX_TRADE_RATIO := 0.8
-const NPC_REBALANCE_BONUS_FACTOR := 9.0
-const NPC_REBALANCE_ALLOW_NEGATIVE_THRESHOLD := 1.8
 const BUY_MARKUP := 1.06
 const SELL_MARKDOWN := 0.9
 const PRESSURE_CLAMP_MIN := -1.2
@@ -686,13 +684,7 @@ func find_npc_route(npc: Dictionary):
 				var buy_price: int = get_station_buy_price(from, resource_id)
 				var sell_price: int = get_station_sell_price(to, resource_id)
 				var unit_profit: float = float(sell_price - buy_price)
-				var from_ratio: float = get_stock_ratio(from, resource_id)
-				var to_ratio: float = get_stock_ratio(to, resource_id)
-				var rebalance_gap: float = maxf(0.0, from_ratio - to_ratio)
-				# Encourage moving goods from surplus -> shortage even when pure arbitrage is weak.
-				var rebalance_bonus_per_unit: float = rebalance_gap * NPC_REBALANCE_BONUS_FACTOR
-				# Allow a slightly negative route only if rebalancing impact is strong enough.
-				if unit_profit < 0.0 and rebalance_bonus_per_unit < NPC_REBALANCE_ALLOW_NEGATIVE_THRESHOLD:
+				if unit_profit < 2.0:
 					continue
 				var max_amount: int = mini(get_inventory_amount(from["inventory"], resource_id), npc_free / vol)
 				max_amount = mini(max_amount, get_available_capacity(to["inventory"]) / vol)
@@ -701,7 +693,7 @@ func find_npc_route(npc: Dictionary):
 				var amount: int = maxi(0, int(round(float(max_amount) * rng.randf_range(NPC_MIN_TRADE_RATIO, NPC_MAX_TRADE_RATIO))))
 				if amount <= 0:
 					continue
-				var trade_score: float = (unit_profit + rebalance_bonus_per_unit) * float(amount)
+				var trade_score: float = unit_profit * float(amount)
 				if trade_score <= best_trade_score:
 					continue
 				best_trade_score = trade_score
