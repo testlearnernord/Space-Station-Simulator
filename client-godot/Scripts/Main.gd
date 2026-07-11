@@ -668,7 +668,7 @@ func find_npc_route(npc: Dictionary):
 	var npc_credits: int = int(npc.get("credits", 0))
 	var npc_inv: Dictionary = npc.get("inventory", {})
 	var npc_free: int = get_available_capacity(npc_inv) if not npc_inv.is_empty() else int(npc.get("cargo_capacity", 20))
-	var best_profit := 0.0
+	var best_score: float = 0.0
 	var best = null
 	for resource_id in RESOURCE_IDS:
 		var vol: int = int(RESOURCES[resource_id]["volume_per_unit"])
@@ -679,7 +679,11 @@ func find_npc_route(npc: Dictionary):
 				var buy_price: int = get_station_buy_price(from, resource_id)
 				var sell_price: int = get_station_sell_price(to, resource_id)
 				var unit_profit: float = float(sell_price - buy_price)
-				if unit_profit < 2.0:
+				var from_ratio: float = get_stock_ratio(from, resource_id)
+				var to_ratio: float = get_stock_ratio(to, resource_id)
+				var rebalance_gap: float = maxf(0.0, from_ratio - to_ratio)
+				var rebalance_bonus_per_unit: float = rebalance_gap * 9.0
+				if unit_profit < 0.0 and rebalance_bonus_per_unit < 1.8:
 					continue
 				var max_amount: int = mini(get_inventory_amount(from["inventory"], resource_id), npc_free / vol)
 				max_amount = mini(max_amount, get_available_capacity(to["inventory"]) / vol)
@@ -688,10 +692,10 @@ func find_npc_route(npc: Dictionary):
 				var amount: int = maxi(0, int(round(float(max_amount) * rng.randf_range(NPC_MIN_TRADE_RATIO, NPC_MAX_TRADE_RATIO))))
 				if amount <= 0:
 					continue
-				var expected: float = unit_profit * float(amount)
-				if expected <= best_profit:
+				var expected: float = (unit_profit + rebalance_bonus_per_unit) * float(amount)
+				if expected <= best_score:
 					continue
-				best_profit = expected
+				best_score = expected
 				best = {"resource_id": resource_id, "from": from, "to": to, "amount": amount}
 	return best
 
@@ -724,6 +728,34 @@ func get_stock_state(station: Dictionary, resource_id: String) -> String:
 	if ratio < LOW_STOCK_RATIO: return "Knapp"
 	if ratio > OVERSTOCK_RATIO: return "Überschuss"
 	return "Stabil"
+
+
+func get_stock_ratio(station: Dictionary, resource_id: String) -> float:
+	var target: int = maxi(1, int(station["target_stock"][resource_id]))
+	var current: int = get_inventory_amount(station["inventory"], resource_id)
+	return float(current) / float(target)
+
+
+func get_station_primary_resource_id(station: Dictionary) -> String:
+	var stype: Dictionary = STATION_TYPES[station["type_id"]]
+	var production: Dictionary = stype["production"]
+	var best_resource_id: String = ""
+	var best_production: int = -1
+	for resource_id in RESOURCE_IDS:
+		var produced: int = int(production.get(resource_id, 0))
+		if produced > best_production:
+			best_production = produced
+			best_resource_id = resource_id
+	if best_production > 0 and not best_resource_id.is_empty():
+		return best_resource_id
+
+	var best_ratio: float = -99999.0
+	for resource_id in RESOURCE_IDS:
+		var ratio: float = get_stock_ratio(station, resource_id)
+		if ratio > best_ratio:
+			best_ratio = ratio
+			best_resource_id = resource_id
+	return best_resource_id if not best_resource_id.is_empty() else DEFAULT_RESOURCE_ID
 
 # ─── Trade ────────────────────────────────────────────────────────────────────
 
@@ -847,21 +879,26 @@ func draw_background() -> void:
 func draw_station_node(station: Dictionary, index: int) -> void:
 	var pulse := 0.84 + 0.16 * sin(visual_time * 1.4 + float(index))
 	var radius := 22.0 + 2.5 * sin(visual_time + float(index))
-	draw_circle(station["position"], radius, STATION_COLOR * pulse)
+	var station_pos: Vector2 = Vector2(station["position"])
+	draw_circle(station_pos, radius, STATION_COLOR * pulse)
 
 	if index % 2 == 0:
-		draw_arc(station["position"], radius + 8.0, 0.0, TAU, 48, Color(0.55, 0.9, 1.0, 0.65), 2.5)
+		draw_arc(station_pos, radius + 8.0, 0.0, TAU, 48, Color(0.55, 0.9, 1.0, 0.65), 2.5)
 	else:
-		draw_arc(station["position"], radius + 9.0, visual_time * 0.2, visual_time * 0.2 + TAU, 24, Color(0.7, 0.9, 1.0, 0.7), 2.4)
+		draw_arc(station_pos, radius + 9.0, visual_time * 0.2, visual_time * 0.2 + TAU, 24, Color(0.7, 0.9, 1.0, 0.7), 2.4)
 
 	var focus := selected_resource_id if RESOURCES.has(selected_resource_id) else DEFAULT_RESOURCE_ID
-	draw_string(ThemeDB.fallback_font, station["position"] + Vector2(-64.0, -34.0), station["name"], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 14)
-	draw_string(ThemeDB.fallback_font, station["position"] + Vector2(-64.0, 46.0),
+	var primary_resource_id: String = get_station_primary_resource_id(station)
+	var primary_icon_rect: Rect2 = Rect2(station_pos + Vector2(-90.0, -24.0), Vector2(20.0, 20.0))
+	draw_resource_icon(primary_icon_rect, primary_resource_id)
+
+	draw_string(ThemeDB.fallback_font, station_pos + Vector2(-64.0, -34.0), station["name"], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 14)
+	draw_string(ThemeDB.fallback_font, station_pos + Vector2(-64.0, 46.0),
 		"Buy %d / Sell %d" % [get_station_buy_price(station, focus), get_station_sell_price(station, focus)],
 		HORIZONTAL_ALIGNMENT_LEFT, -1.0, 13)
 
 	var dock_point := get_dock_point(station)
-	draw_line(station["position"], dock_point, Color(0.6, 0.95, 1.0, 0.7), 2.0)
+	draw_line(station_pos, dock_point, Color(0.6, 0.95, 1.0, 0.7), 2.0)
 	draw_circle(dock_point, 5.0, Color(0.8, 1.0, 1.0, 0.8))
 
 
