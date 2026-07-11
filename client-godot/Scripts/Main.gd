@@ -307,7 +307,12 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event.keycode == KEY_ESCAPE:
 		search = ""
 	elif event.unicode > 31 and event.unicode < 127:
-		search += char(event.unicode).to_lower()
+		var is_movement_key: bool = InputMap.event_is_action(event, "move_left") or \
+				InputMap.event_is_action(event, "move_right") or \
+				InputMap.event_is_action(event, "move_up") or \
+				InputMap.event_is_action(event, "move_down")
+		if not is_movement_key:
+			search += char(event.unicode).to_lower()
 
 
 func _draw() -> void:
