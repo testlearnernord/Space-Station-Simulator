@@ -286,7 +286,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		prime_audio()
 
 	if event is InputEventKey and event.pressed and not event.echo:
-		if event.keycode == RESET_HOTKEY:
+		var keycode: int = int(event.keycode)
+		if keycode == RESET_HOTKEY:
 			reset_run()
 			return
 		prime_audio()
@@ -390,7 +391,7 @@ func reset_run() -> void:
 	search = ""
 	selected_resource_id = DEFAULT_RESOURCE_ID
 	quantity = 1
-	toast_text = "Run reset. Save deleted." if save_deleted else "Run reset complete. Warning: save file could not be deleted."
+	toast_text = "Run reset. Save deleted." if save_deleted else "Run reset complete. Warning: save file deletion failed (check console)."
 	toast_timer = 2.5
 	last_trade_failed = false
 	hovered_control_id = ""
@@ -406,11 +407,11 @@ func delete_save_file() -> bool:
 		return true
 	var save_dir: DirAccess = DirAccess.open(SAVE_DIRECTORY)
 	if save_dir == null:
-		push_warning("Reset failed: could not open save directory")
+		push_warning("Reset failed: could not access save directory at %s" % SAVE_DIRECTORY)
 		return false
 	var err: Error = save_dir.remove(SAVE_FILE_NAME)
 	if err != OK:
-		push_warning("Reset failed: could not delete save file")
+		push_warning("Reset failed: could not delete save file at %s" % SAVE_PATH)
 		return false
 	return true
 
