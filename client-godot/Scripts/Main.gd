@@ -701,10 +701,10 @@ func find_npc_route(npc: Dictionary):
 				var amount: int = maxi(0, int(round(float(max_amount) * rng.randf_range(NPC_MIN_TRADE_RATIO, NPC_MAX_TRADE_RATIO))))
 				if amount <= 0:
 					continue
-				var expected: float = (unit_profit + rebalance_bonus_per_unit) * float(amount)
-				if expected <= best_trade_score:
+				var trade_score: float = (unit_profit + rebalance_bonus_per_unit) * float(amount)
+				if trade_score <= best_trade_score:
 					continue
-				best_trade_score = expected
+				best_trade_score = trade_score
 				best = {"resource_id": resource_id, "from": from, "to": to, "amount": amount}
 	return best
 
