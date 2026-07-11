@@ -738,27 +738,6 @@ func get_stock_ratio(station: Dictionary, resource_id: String) -> float:
 	return float(current) / float(target)
 
 
-func get_station_primary_resource_id(station: Dictionary) -> String:
-	var stype: Dictionary = STATION_TYPES[station["type_id"]]
-	var production: Dictionary = stype["production"]
-	var best_resource_id: String = DEFAULT_RESOURCE_ID
-	var best_production: int = -1
-	for resource_id in RESOURCE_IDS:
-		var produced: int = int(production.get(resource_id, 0))
-		if produced > best_production:
-			best_production = produced
-			best_resource_id = resource_id
-	if best_production > 0 and not best_resource_id.is_empty():
-		return best_resource_id
-
-	var best_ratio: float = -INF
-	for resource_id in RESOURCE_IDS:
-		var ratio: float = get_stock_ratio(station, resource_id)
-		if ratio > best_ratio:
-			best_ratio = ratio
-			best_resource_id = resource_id
-	return best_resource_id
-
 # ─── Trade ────────────────────────────────────────────────────────────────────
 
 # Shared agent trade helpers — used identically for player and NPCs.
@@ -890,9 +869,6 @@ func draw_station_node(station: Dictionary, index: int) -> void:
 		draw_arc(station_pos, radius + 9.0, visual_time * 0.2, visual_time * 0.2 + TAU, 24, Color(0.7, 0.9, 1.0, 0.7), 2.4)
 
 	var focus := selected_resource_id if RESOURCES.has(selected_resource_id) else DEFAULT_RESOURCE_ID
-	var primary_resource_id: String = get_station_primary_resource_id(station)
-	var primary_icon_rect: Rect2 = Rect2(station_pos + Vector2(-90.0, -24.0), Vector2(20.0, 20.0))
-	draw_resource_icon(primary_icon_rect, primary_resource_id)
 
 	draw_string(ThemeDB.fallback_font, station_pos + Vector2(-64.0, -34.0), station["name"], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 14)
 	draw_string(ThemeDB.fallback_font, station_pos + Vector2(-64.0, 46.0),
