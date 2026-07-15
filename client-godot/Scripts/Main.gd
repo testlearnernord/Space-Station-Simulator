@@ -2,11 +2,11 @@ extends Node2D
 
 # ─── Constants ────────────────────────────────────────────────────────────────
 
-const SAVE_VERSION := 2
+const SAVE_VERSION := 3
 const SAVE_DIRECTORY := "user://"
 const SAVE_FILE_NAME := "savegame.json"
 const SAVE_PATH := SAVE_DIRECTORY + SAVE_FILE_NAME
-const DEFAULT_RESOURCE_ID := "wood"
+const DEFAULT_RESOURCE_ID := "ore"
 const CARGO_CAPACITY := 32
 const RESET_HOTKEY := KEY_F8
 const RESET_HOTKEY_LABEL := "F8"
@@ -50,6 +50,9 @@ const MAX_PRICE_MULTIPLIER := 2.6
 const VERY_HIGH_DEMAND_RATIO := 0.45
 const LOW_STOCK_RATIO := 0.8
 const OVERSTOCK_RATIO := 1.5
+const TRANSIT_ZONE := 22.0
+const TRANSITION_DURATION := 0.7
+const INTERSYSTEM_NPC_TRAVEL_TIME := 9.0
 
 const STATION_COLOR := Color(0.35, 0.75, 1.0)
 const PLAYER_COLOR := Color(1.0, 0.86, 0.25)
@@ -84,71 +87,173 @@ const UI_BUTTON_PRESS_BG := Color(0.23, 0.39, 0.6, 0.98)
 const TOAST_BG_COLOR := Color(0.05, 0.1, 0.2, 0.92)
 const TOAST_BORDER_COLOR := Color(0.5, 0.9, 1.0, 0.85)
 const INTERACT_FEEDBACK_TIME := 0.14
+const PROCESS_BUTTON_COLOR := Color(0.28, 0.16, 0.44, 0.95)
 
-# Resource definitions: id -> {id, display_name, tier, category, icon, base_price, volume_per_unit, description}
+# T1 raw resources and T2 processed resources
 const RESOURCES := {
-	"wood": {
-		"id": "wood", "display_name": "Holz", "tier": 1, "category": "Rohstoff",
-		"icon": "▦", "base_price": 18.0, "volume_per_unit": 1, "description": "Leichtes Baumaterial."
+	"ore": {
+		"id": "ore", "display_name": "Erz", "tier": 1, "category": "Rohstoff",
+		"icon": "◈", "base_price": 20.0, "volume_per_unit": 1,
+		"description": "Rohes Mineral. Grundlage der Metallverarbeitung."
 	},
-	"coal": {
-		"id": "coal", "display_name": "Kohle", "tier": 1, "category": "Rohstoff",
-		"icon": "◼", "base_price": 21.0, "volume_per_unit": 1, "description": "Brennstoff und Industriegrundstoff."
+	"raw_gas": {
+		"id": "raw_gas", "display_name": "Rohgas", "tier": 1, "category": "Rohstoff",
+		"icon": "◉", "base_price": 18.0, "volume_per_unit": 1,
+		"description": "Unraffiniertes Gasgemisch aus Nebeln."
 	},
-	"copper_plate": {
-		"id": "copper_plate", "display_name": "Kupferplatte", "tier": 2, "category": "Verarbeitetes Material",
-		"icon": "▤", "base_price": 44.0, "volume_per_unit": 2, "description": "Leitfähiges Material."
+	"crystal": {
+		"id": "crystal", "display_name": "Kristall", "tier": 1, "category": "Rohstoff",
+		"icon": "◇", "base_price": 26.0, "volume_per_unit": 1,
+		"description": "Reine Kristallstrukturen. Basis synthetischer Materialien."
 	},
-	"plastic": {
-		"id": "plastic", "display_name": "Plastik", "tier": 2, "category": "Verarbeitetes Material",
-		"icon": "⬡", "base_price": 40.0, "volume_per_unit": 2, "description": "Vielseitiger Verbundwerkstoff."
+	"alloy": {
+		"id": "alloy", "display_name": "Legierung", "tier": 2, "category": "Verarbeitetes Material",
+		"icon": "▣", "base_price": 55.0, "volume_per_unit": 2,
+		"description": "Hochfestes Metall. Aus Erz geschmolzen."
+	},
+	"fuel": {
+		"id": "fuel", "display_name": "Treibstoff", "tier": 2, "category": "Verarbeitetes Material",
+		"icon": "⬟", "base_price": 48.0, "volume_per_unit": 2,
+		"description": "Raffinierter Reaktionstreibstoff. Aus Rohgas gewonnen."
+	},
+	"polymer": {
+		"id": "polymer", "display_name": "Polymer", "tier": 2, "category": "Verarbeitetes Material",
+		"icon": "⬡", "base_price": 62.0, "volume_per_unit": 2,
+		"description": "Synthetisches Verbundmaterial. Aus Kristall synthetisiert."
 	}
 }
 
-const RESOURCE_IDS := ["wood", "coal", "copper_plate", "plastic"]
+const RESOURCE_IDS := ["ore", "raw_gas", "crystal", "alloy", "fuel", "polymer"]
 const SORT_KEYS := ["name", "tier", "amount", "value", "unit_price"]
 
-# Station type definitions: capacity, target_stock, production, consumption
-const STATION_TYPES := {
-	"mining_outpost": {
-		"id": "mining_outpost", "display_name": "Bergbau-Außenposten", "capacity": 120,
-		"target_stock": {"wood": 16, "coal": 50, "copper_plate": 14, "plastic": 10},
-		"production": {"coal": 4}, "consumption": {"plastic": 1, "copper_plate": 1}
+# Processing modules: each converts ratio units of T1 input into 1 unit of T2 output.
+# fee: credits charged per output unit produced (goes to station owner).
+const PROCESSING_MODULES := {
+	"smelter": {
+		"id": "smelter", "display_name": "Schmelzofen",
+		"input": "ore", "output": "alloy", "ratio": 3, "fee": 14,
+		"description": "Schmilzt Erz zu Legierung. 3 Erz → 1 Legierung."
 	},
-	"wood_processing": {
-		"id": "wood_processing", "display_name": "Holzverarbeitung", "capacity": 115,
-		"target_stock": {"wood": 48, "coal": 16, "copper_plate": 10, "plastic": 18},
-		"production": {"wood": 4}, "consumption": {"coal": 2, "plastic": 1}
+	"refinery": {
+		"id": "refinery", "display_name": "Raffinerie",
+		"input": "raw_gas", "output": "fuel", "ratio": 3, "fee": 12,
+		"description": "Raffiniert Rohgas zu Treibstoff. 3 Rohgas → 1 Treibstoff."
 	},
-	"industry_hub": {
-		"id": "industry_hub", "display_name": "Industrie-Hub", "capacity": 145,
-		"target_stock": {"wood": 26, "coal": 28, "copper_plate": 30, "plastic": 30},
-		"production": {"copper_plate": 2, "plastic": 2}, "consumption": {"wood": 2, "coal": 2}
-	},
-	"trade_station": {
-		"id": "trade_station", "display_name": "Handelsstation", "capacity": 165,
-		"target_stock": {"wood": 24, "coal": 24, "copper_plate": 22, "plastic": 22},
-		"production": {}, "consumption": {}
+	"synthesizer": {
+		"id": "synthesizer", "display_name": "Synthesizer",
+		"input": "crystal", "output": "polymer", "ratio": 2, "fee": 16,
+		"description": "Synthetisiert Polymer aus Kristall. 2 Kristall → 1 Polymer."
 	}
 }
+
+# Station type definitions: capacity, target_stock, production, consumption, modules
+const STATION_TYPES := {
+	"mining_outpost": {
+		"id": "mining_outpost", "display_name": "Bergbau-Außenposten", "capacity": 130,
+		"target_stock": {"ore": 52, "raw_gas": 10, "crystal": 8, "alloy": 16, "fuel": 8, "polymer": 6},
+		"production": {"ore": 5}, "consumption": {"fuel": 1},
+		"modules": ["smelter"]
+	},
+	"gas_platform": {
+		"id": "gas_platform", "display_name": "Gasplattform", "capacity": 125,
+		"target_stock": {"ore": 10, "raw_gas": 50, "crystal": 8, "alloy": 8, "fuel": 16, "polymer": 6},
+		"production": {"raw_gas": 5}, "consumption": {"alloy": 1},
+		"modules": ["refinery"]
+	},
+	"crystal_mine": {
+		"id": "crystal_mine", "display_name": "Kristallmine", "capacity": 120,
+		"target_stock": {"ore": 8, "raw_gas": 8, "crystal": 42, "alloy": 6, "fuel": 8, "polymer": 16},
+		"production": {"crystal": 4}, "consumption": {"fuel": 1},
+		"modules": ["synthesizer"]
+	},
+	"trade_hub": {
+		"id": "trade_hub", "display_name": "Handelsstation", "capacity": 175,
+		"target_stock": {"ore": 22, "raw_gas": 20, "crystal": 18, "alloy": 24, "fuel": 20, "polymer": 18},
+		"production": {}, "consumption": {},
+		"modules": []
+	},
+	"industrial_complex": {
+		"id": "industrial_complex", "display_name": "Industriekomplex", "capacity": 160,
+		"target_stock": {"ore": 30, "raw_gas": 28, "crystal": 22, "alloy": 28, "fuel": 26, "polymer": 22},
+		"production": {"alloy": 1, "fuel": 1, "polymer": 1}, "consumption": {"ore": 3, "raw_gas": 3, "crystal": 2},
+		"modules": ["smelter", "refinery", "synthesizer"]
+	}
+}
+
+# Star system definitions.
+# neighbors: direction -> system_id (empty string means map boundary).
+# Visual theme: bg_color, two nebula overlay colors, star_r/g/b_base, accent color.
+const SYSTEMS := {
+	"ymir_prime": {
+		"id": "ymir_prime", "display_name": "Ymir-Prime",
+		"neighbors": {"north": "aether_nebula", "east": "igneos_sector", "south": "glacies_rift", "west": "verdun_cluster"},
+		"bg_color": Color(0.01, 0.02, 0.07),
+		"nebula1_pos_ratio": Vector2(0.75, 0.72), "nebula1_radius": 220.0, "nebula1_color": Color(0.08, 0.05, 0.16, 0.38),
+		"nebula2_pos_ratio": Vector2(0.2, 0.85),  "nebula2_radius": 180.0, "nebula2_color": Color(0.06, 0.08, 0.20, 0.28),
+		"star_r_base": 0.78, "star_g_base": 0.78, "star_b_base": 0.90,
+		"accent_color": Color(0.35, 0.75, 1.0, 0.80)
+	},
+	"aether_nebula": {
+		"id": "aether_nebula", "display_name": "Aether-Nebel",
+		"neighbors": {"north": "", "east": "", "south": "ymir_prime", "west": ""},
+		"bg_color": Color(0.02, 0.01, 0.09),
+		"nebula1_pos_ratio": Vector2(0.55, 0.40), "nebula1_radius": 260.0, "nebula1_color": Color(0.20, 0.05, 0.38, 0.44),
+		"nebula2_pos_ratio": Vector2(0.25, 0.70), "nebula2_radius": 200.0, "nebula2_color": Color(0.14, 0.04, 0.28, 0.36),
+		"star_r_base": 0.72, "star_g_base": 0.65, "star_b_base": 0.98,
+		"accent_color": Color(0.72, 0.35, 1.0, 0.80)
+	},
+	"igneos_sector": {
+		"id": "igneos_sector", "display_name": "Igneos-Sektor",
+		"neighbors": {"north": "", "east": "", "south": "", "west": "ymir_prime"},
+		"bg_color": Color(0.06, 0.01, 0.01),
+		"nebula1_pos_ratio": Vector2(0.60, 0.45), "nebula1_radius": 240.0, "nebula1_color": Color(0.30, 0.08, 0.02, 0.42),
+		"nebula2_pos_ratio": Vector2(0.30, 0.75), "nebula2_radius": 190.0, "nebula2_color": Color(0.22, 0.06, 0.02, 0.32),
+		"star_r_base": 0.98, "star_g_base": 0.72, "star_b_base": 0.52,
+		"accent_color": Color(1.0, 0.42, 0.10, 0.80)
+	},
+	"glacies_rift": {
+		"id": "glacies_rift", "display_name": "Glacies-Rift",
+		"neighbors": {"north": "ymir_prime", "east": "", "south": "", "west": ""},
+		"bg_color": Color(0.01, 0.02, 0.07),
+		"nebula1_pos_ratio": Vector2(0.50, 0.35), "nebula1_radius": 250.0, "nebula1_color": Color(0.04, 0.20, 0.38, 0.46),
+		"nebula2_pos_ratio": Vector2(0.78, 0.78), "nebula2_radius": 195.0, "nebula2_color": Color(0.02, 0.14, 0.28, 0.36),
+		"star_r_base": 0.68, "star_g_base": 0.88, "star_b_base": 1.00,
+		"accent_color": Color(0.28, 0.88, 1.0, 0.80)
+	},
+	"verdun_cluster": {
+		"id": "verdun_cluster", "display_name": "Verdun-Cluster",
+		"neighbors": {"north": "", "east": "ymir_prime", "south": "", "west": ""},
+		"bg_color": Color(0.01, 0.05, 0.03),
+		"nebula1_pos_ratio": Vector2(0.45, 0.40), "nebula1_radius": 235.0, "nebula1_color": Color(0.04, 0.20, 0.10, 0.42),
+		"nebula2_pos_ratio": Vector2(0.72, 0.72), "nebula2_radius": 185.0, "nebula2_color": Color(0.03, 0.14, 0.08, 0.32),
+		"star_r_base": 0.60, "star_g_base": 0.92, "star_b_base": 0.70,
+		"accent_color": Color(0.20, 0.92, 0.50, 0.80)
+	}
+}
+
 
 # ─── State ────────────────────────────────────────────────────────────────────
 
 var rng := RandomNumberGenerator.new()
 var stations: Array = []
 var npcs: Array = []
-# Unified agent dict for the player — same structure as NPC agents.
-# Keys: "credits" (int), "inventory" (Dictionary with "capacity" and "stacks")
 var player_agent: Dictionary = {"credits": 600, "inventory": {"capacity": CARGO_CAPACITY, "stacks": {}}}
 var avg_buy_price: Dictionary = {}
 var trade_log: Array = []
-var stars: Array = []
+var all_stars: Dictionary = {}
+
+var current_system_id := "ymir_prime"
+var is_transitioning := false
+var transition_direction := ""
+var transition_dest_system := ""
+var transition_progress := 0.0
+var transition_switched := false
 
 var player_position := DEFAULT_PLAYER_POSITION
 var player_velocity := Vector2.ZERO
 var player_rotation := 0.0
 var is_docked := false
-var docking_station = null
+var docking_station: Dictionary = {}
 var docking_progress := 0.0
 var was_dock_held := false
 var goal_reached := false
@@ -205,7 +310,7 @@ func _ready() -> void:
 	rng.seed = DEFAULT_RNG_SEED
 	setup_defaults()
 	load_state()
-	generate_starfield()
+	generate_all_starfields()
 	setup_audio()
 	ensure_resource_selected()
 	update_hud()
@@ -219,14 +324,21 @@ func _process(delta: float) -> void:
 	visual_time += delta
 	engine_sound_cooldown = maxf(0.0, engine_sound_cooldown - delta)
 
+	update_system_transition(delta)
+
+	if is_transitioning:
+		queue_redraw()
+		return
+
 	if is_docked:
 		player_velocity = Vector2.ZERO
-		if docking_station != null:
+		if not docking_station.is_empty():
 			player_position = get_dock_point(docking_station)
 			player_rotation = (docking_station["position"] - player_position).angle()
 		if Input.is_action_pressed("move_left") or Input.is_action_pressed("move_right") or \
 				Input.is_action_pressed("move_up") or Input.is_action_pressed("move_down"):
 			is_docked = false
+			docking_station = {}
 			status = "Undocked. Hold C near a station to dock again."
 	else:
 		handle_movement(delta)
@@ -252,12 +364,12 @@ func _process(delta: float) -> void:
 
 	if int(player_agent["credits"]) >= 2000 and not goal_reached:
 		goal_reached = true
-		status = "Goal reached! Keep optimizing your trade routes."
+		status = "Ziel erreicht! Optimiere weiter deine Handelsrouten."
 
 	if int(player_agent["credits"]) >= 2600 and not has_own_station:
 		has_own_station = true
 		build_player_station()
-		status = "You founded a private station node."
+		status = "Eigene Industriestation errichtet. Du erhältst nun Verarbeitungsgebühren."
 
 	if toast_timer > 0.0:
 		toast_timer -= delta
@@ -325,8 +437,11 @@ func _unhandled_input(event: InputEvent) -> void:
 
 func _draw() -> void:
 	draw_background()
-	for i in range(stations.size()):
-		draw_station_node(stations[i], i)
+	var draw_idx: int = 0
+	for station in stations:
+		if str(station["system_id"]) == current_system_id:
+			draw_station_node(station, draw_idx)
+			draw_idx += 1
 	draw_npc_markers()
 
 	if has_own_station:
@@ -335,1343 +450,1544 @@ func _draw() -> void:
 		draw_ship()
 
 	control_hit_rects.clear()
-	if is_docked and docking_station != null:
+	if is_docked and not docking_station.is_empty():
 		draw_trade_interface(docking_station)
 
 	if not toast_text.is_empty():
 		draw_toast()
 
+	if is_transitioning:
+		draw_transition_overlay()
+
+
 # ─── Setup ────────────────────────────────────────────────────────────────────
 
 func setup_defaults() -> void:
-	stations.clear()
-	npcs.clear()
-	player_agent = {"credits": 600, "inventory": {"capacity": CARGO_CAPACITY, "stacks": {}}}
-	avg_buy_price.clear()
-
-	stations.append(create_station("station_a", "Atlas Hub", Vector2(260, 160), "mining_outpost", 4.0, 0.01))
-	stations.append(create_station("station_b", "Kepler Dock", Vector2(610, 220), "wood_processing", 10.0, 0.05))
-	stations.append(create_station("station_c", "Helios Yard", Vector2(430, 460), "industry_hub", 7.0, -0.01))
-	stations.append(create_station("station_d", "Nova Ring", Vector2(760, 420), "trade_station", 14.0, 0.08))
-
-	for station in stations:
-		for resource_id in RESOURCE_IDS:
-			var target: int = station["target_stock"][resource_id]
-			var initial := clampi(target + rng.randi_range(SEED_VARIANCE_MIN, SEED_VARIANCE_MAX), MIN_INITIAL_STOCK, target + MAX_INITIAL_STOCK_BONUS)
-			add_to_inventory(station["inventory"], resource_id, initial)
-
-	npcs.append(create_npc("Local Trader", 20, 0.65, 0))
-	npcs.append(create_npc("Bulk Hauler", 28, 0.82, 1))
-	npcs.append(create_npc("Opportunist", 18, 0.55, 2))
-	sync_npc_visuals()
-
-
-func reset_run() -> void:
-	var save_deleted: bool = delete_save_file()
 	rng.seed = DEFAULT_RNG_SEED
-	setup_defaults()
-	stars.clear()
-	generate_starfield()
+	stations = []
+	npcs = []
 	player_position = DEFAULT_PLAYER_POSITION
 	player_velocity = Vector2.ZERO
 	player_rotation = 0.0
 	is_docked = false
-	docking_station = null
+	docking_station = {}
 	docking_progress = 0.0
 	was_dock_held = false
 	goal_reached = false
 	has_own_station = false
+	current_system_id = "ymir_prime"
+	is_transitioning = false
+	transition_progress = 0.0
+	trade_log = []
+	avg_buy_price = {}
 	economy_accumulator = 0.0
 	npc_accumulator = 0.0
 	save_accumulator = 0.0
-	visual_time = 0.0
-	trade_log.clear()
-	sort_key = "value"
-	sort_ascending = false
-	search = ""
-	selected_resource_id = DEFAULT_RESOURCE_ID
-	quantity = 1
-	toast_text = "Run reset. Save deleted." if save_deleted else "Run reset complete. Warning: save file deletion failed (check console)."
-	toast_timer = 2.5
-	last_trade_failed = false
-	hovered_control_id = ""
-	feedback_control_id = ""
-	feedback_timer = 0.0
-	status = DEFAULT_STATUS
-	ensure_resource_selected()
-	update_hud()
+	player_agent = {"credits": 600, "inventory": {"capacity": CARGO_CAPACITY, "stacks": {}}}
+	spawn_all_systems()
 
 
-func delete_save_file() -> bool:
-	if not FileAccess.file_exists(SAVE_PATH):
-		return true
-	var save_directory: DirAccess = DirAccess.open(SAVE_DIRECTORY)
-	if save_directory == null:
-		push_warning("Reset failed: could not access save directory at %s" % SAVE_DIRECTORY)
-		return false
-	var remove_error: Error = save_directory.remove(SAVE_FILE_NAME)
-	if remove_error != OK:
-		push_warning("Reset failed: could not delete save file at %s" % SAVE_PATH)
-		return false
-	return true
+func spawn_all_systems() -> void:
+	# Ymir-Prime (center – original system, blue)
+	create_station("Bergbauzentrum Alpha",  "mining_outpost",  Vector2(195, 165), 42, "ymir_prime")
+	create_station("Gasplattform Ymir-1",   "gas_platform",    Vector2(945, 158), 42, "ymir_prime")
+	create_station("Handelsstation Kern",   "trade_hub",       Vector2(205, 512), 42, "ymir_prime")
+	create_station("Industriekomplex Y-3",  "industrial_complex", Vector2(938, 500), 42, "ymir_prime")
 
+	# Aether-Nebel (north – purple)
+	create_station("Nebel-Mine Aether-1",   "crystal_mine",    Vector2(188, 158), 47, "aether_nebula")
+	create_station("Handelsknoten Aether",  "trade_hub",       Vector2(942, 162), 47, "aether_nebula")
+	create_station("Synthese-Labor A-7",    "industrial_complex", Vector2(580, 345), 47, "aether_nebula")
+	create_station("Gas-Plattform Aether",  "gas_platform",    Vector2(200, 510), 47, "aether_nebula")
 
-func create_station(id: String, sname: String, position: Vector2, type_id: String, distance: float, event_mod: float) -> Dictionary:
-	var stype: Dictionary = STATION_TYPES[type_id]
-	var target_stock := {}
-	for k in stype["target_stock"]:
-		target_stock[k] = stype["target_stock"][k]
-	return {
-		"id": id,
-		"name": sname,
-		"type_id": type_id,
-		"position": position,
-		"distance": distance,
-		"event_mod": event_mod,
-		"inventory": {"capacity": stype["capacity"], "stacks": {}},
-		"target_stock": target_stock
-	}
+	# Igneos-Sektor (east – red/orange)
+	create_station("Schmelzwerk Igneos-1",  "mining_outpost",  Vector2(192, 162), 53, "igneos_sector")
+	create_station("Raffinerie Igneos-2",   "gas_platform",    Vector2(940, 162), 53, "igneos_sector")
+	create_station("Kristallhöhle Igneos",  "crystal_mine",    Vector2(200, 505), 53, "igneos_sector")
+	create_station("Handelsposten Igneos",  "trade_hub",       Vector2(938, 502), 53, "igneos_sector")
 
+	# Glacies-Rift (south – ice blue)
+	create_station("Eismine Glacies-1",     "crystal_mine",    Vector2(192, 158), 61, "glacies_rift")
+	create_station("Gasfeld Glacies-2",     "gas_platform",    Vector2(945, 162), 61, "glacies_rift")
+	create_station("Kältezentrum Glacies",  "trade_hub",       Vector2(200, 508), 61, "glacies_rift")
+	create_station("Industrie-Depot G-4",   "industrial_complex", Vector2(940, 505), 61, "glacies_rift")
 
-func create_npc(npc_name: String, cargo_capacity: int, efficiency: float, station_index: int) -> Dictionary:
-	var anchor_station: Dictionary = stations[station_index % stations.size()]
-	var anchor_station_id: String = str(anchor_station["id"])
-	return {
-		"name": npc_name,
-		"cargo_capacity": cargo_capacity,
-		"efficiency": efficiency,
-		"home_station_id": anchor_station_id,
-		"anchor_station_id": anchor_station_id,
-		"route_from_id": "",
-		"route_to_id": "",
-		"travel_progress": 1.0,
-		"travel_time": NPC_VISUAL_MIN_TRAVEL,
-		"visual_position": get_station_npc_anchor(anchor_station, station_index),
-		"visual_rotation": 0.0,
-		"idle_phase": rng.randf_range(0.0, TAU),
-		"cargo_resource_id": "",
-		# Agent fields — same model as the player
-		"inventory": {"capacity": cargo_capacity, "stacks": {}},
-		"credits": 400,
-		"state": "idle",
-		"cargo_amount": 0,
-		"destination_station_id": ""
-	}
+	# Verdun-Cluster (west – green/teal)
+	create_station("Erzlager Verdun-1",     "mining_outpost",  Vector2(190, 162), 67, "verdun_cluster")
+	create_station("Kristallfarm Verdun-2", "crystal_mine",    Vector2(942, 158), 67, "verdun_cluster")
+	create_station("Raffineriehof Verdun",  "gas_platform",    Vector2(200, 508), 67, "verdun_cluster")
+	create_station("Handelszentrum Verdun", "trade_hub",       Vector2(938, 502), 67, "verdun_cluster")
 
-# ─── Movement ─────────────────────────────────────────────────────────────────
-
-func handle_movement(delta: float) -> void:
-	var input_dir := Vector2.ZERO
-	if Input.is_action_pressed("move_left"): input_dir.x -= 1.0
-	if Input.is_action_pressed("move_right"): input_dir.x += 1.0
-	if Input.is_action_pressed("move_up"): input_dir.y -= 1.0
-	if Input.is_action_pressed("move_down"): input_dir.y += 1.0
-
-	var boost_active := Input.is_key_pressed(KEY_SHIFT)
-
-	if input_dir != Vector2.ZERO:
-		input_dir = input_dir.normalized()
-		var boost := BOOST_MULTIPLIER if boost_active else 1.0
-		player_velocity += input_dir * ACCELERATION * boost * delta
-		if engine_sound_cooldown <= 0.0 and not engine_player.playing:
-			engine_player.play()
-			engine_sound_cooldown = 0.14
-	else:
-		player_velocity = player_velocity.move_toward(Vector2.ZERO, DRAG * delta)
-
-	if boost_active and input_dir != Vector2.ZERO and not boost_player.playing:
-		boost_player.play()
-
-	var max_speed := BASE_MAX_SPEED * (BOOST_MULTIPLIER if boost_active else 1.0)
-	if player_velocity.length() > max_speed:
-		player_velocity = player_velocity.normalized() * max_speed
-
-	if player_velocity.length() > 8.0:
-		player_rotation = lerp_angle(player_rotation, player_velocity.angle(), delta * 7.5)
-
-	var viewport_size := get_viewport_rect().size
-	player_position += player_velocity * delta
-	player_position = player_position.clamp(Vector2(24.0, 24.0), viewport_size - Vector2(24.0, 24.0))
-
-# ─── Docking ──────────────────────────────────────────────────────────────────
-
-func update_docking(delta: float) -> void:
-	var dock_pressed := Input.is_key_pressed(KEY_C)
-	var candidate = find_closest_station(DOCK_RANGE)
-
-	if candidate == null:
-		docking_progress = 0.0
-		docking_station = null
-		was_dock_held = dock_pressed
-		return
-
-	if not dock_pressed:
-		if docking_progress > 0.0:
-			status = "Hold C to dock with %s." % candidate["name"]
-		docking_station = candidate
-		docking_progress = 0.0
-		was_dock_held = false
-		return
-
-	if not was_dock_held:
-		dock_start_player.play()
-		was_dock_held = true
-
-	if docking_station != candidate:
-		docking_station = candidate
-		docking_progress = 0.0
-
-	var pull := clampf(delta * 3.6, 0.0, 1.0)
-	player_position = player_position.lerp(get_dock_point(candidate), pull)
-	player_velocity = player_velocity.lerp(Vector2.ZERO, pull)
-	player_rotation = lerp_angle(player_rotation, (candidate["position"] - player_position).angle(), delta * 8.0)
-
-	docking_progress = minf(DOCK_HOLD_TIME, docking_progress + delta)
-	status = "Docking at %s... %d%%" % [candidate["name"], int(round(100.0 * docking_progress / DOCK_HOLD_TIME))]
-
-	if docking_progress >= DOCK_HOLD_TIME:
-		is_docked = true
-		docking_station = candidate
-		docking_progress = 0.0
-		dock_complete_player.play()
-
-	was_dock_held = dock_pressed
-
-
-func find_closest_station(max_distance: float):
-	var closest = null
-	var best := INF
+	# Spawn NPCs for each station
 	for station in stations:
-		var dist: float = player_position.distance_to(station["position"])
-		if dist < best:
-			best = dist
-			closest = station
-	return closest if best <= max_distance else null
+		var station_id: String = str(station["id"])
+		var sys_id: String = str(station["system_id"])
+		create_npc(station_id, sys_id)
+		if rng.randf() < 0.35:
+			create_npc(station_id, sys_id)
 
 
-func get_dock_point(station: Dictionary) -> Vector2:
-	return station["position"] + Vector2(34.0, 0.0)
+func create_station(display_name: String, type_id: String, position: Vector2, seed_offset: int, system_id: String) -> void:
+	var stype: Dictionary = STATION_TYPES[type_id]
+	var station_rng := RandomNumberGenerator.new()
+	station_rng.seed = DEFAULT_RNG_SEED + seed_offset
+	var inventory: Dictionary = {"capacity": int(stype["capacity"]), "stacks": {}}
+	var target_stock: Dictionary = stype["target_stock"]
+	for rid in RESOURCE_IDS:
+		if target_stock.has(rid):
+			var tgt: int = int(target_stock[rid])
+			var bonus: int = station_rng.randi_range(0, MAX_INITIAL_STOCK_BONUS)
+			inventory["stacks"][rid] = mini(tgt + bonus, int(stype["capacity"]))
+	var station_id: String = type_id + "_" + str(stations.size())
+	var modules_copy: Array = []
+	for m in stype["modules"]:
+		modules_copy.append(m)
+	stations.append({
+		"id": station_id, "display_name": display_name, "type_id": type_id,
+		"position": position, "inventory": inventory,
+		"trade_log": [], "is_player_owned": false,
+		"system_id": system_id,
+		"modules": modules_copy,
+		"processing_income": 0
+	})
+
+
+func create_npc(anchor_station_id: String, system_id: String) -> void:
+	var anchor_station: Dictionary = get_station_by_id(anchor_station_id)
+	if anchor_station.is_empty():
+		return
+	var angle: float = float(npcs.size()) * NPC_ANCHOR_ANGLE_STEP + NPC_ANCHOR_BASE_ANGLE
+	var offset_dist: float = NPC_IDLE_RADIUS + float(npcs.size() % 6) * 2.2
+	var pos: Vector2 = anchor_station["position"] + Vector2(cos(angle) * offset_dist, sin(angle) * offset_dist)
+	npcs.append({
+		"id": "npc_" + str(npcs.size()),
+		"anchor_station_id": anchor_station_id,
+		"system_id": system_id,
+		"dest_station_id": "", "dest_system_id": "",
+		"state": "idle",
+		"position": pos, "visual_position": pos, "target_position": pos,
+		"travel_progress": 0.0, "travel_duration": 1.0,
+		"inventory": {"capacity": 24, "stacks": {}},
+		"credits": float(200 + rng.randi_range(0, 180)),
+		"intersystem_travel_timer": 0.0
+	})
+
+
+func build_player_station() -> void:
+	var station_id: String = "industrial_complex_player_hq"
+	var pos := Vector2(580.0, 340.0)
+	var stype: Dictionary = STATION_TYPES["industrial_complex"]
+	var inventory: Dictionary = {"capacity": int(stype["capacity"]), "stacks": {}}
+	var target_stock: Dictionary = stype["target_stock"]
+	for rid in RESOURCE_IDS:
+		if target_stock.has(rid):
+			inventory["stacks"][rid] = int(target_stock[rid])
+	stations.append({
+		"id": station_id, "display_name": "Deine Industriestation", "type_id": "industrial_complex",
+		"position": pos, "inventory": inventory,
+		"trade_log": [], "is_player_owned": true,
+		"system_id": current_system_id,
+		"modules": ["smelter", "refinery", "synthesizer"],
+		"processing_income": 0
+	})
+	show_toast("Eigene Station in " + str(SYSTEMS[current_system_id]["display_name"]) + " gebaut!", 3.5)
 
 
 func get_station_by_id(station_id: String) -> Dictionary:
 	for station in stations:
-		var station_id_str: String = str(station["id"])
-		if station_id_str == station_id:
+		if str(station["id"]) == station_id:
 			return station
 	return {}
 
 
-func get_station_npc_anchor(station: Dictionary, npc_index: int) -> Vector2:
-	var angle: float = NPC_ANCHOR_BASE_ANGLE + float(npc_index) * NPC_ANCHOR_ANGLE_STEP
-	var radius: float = 24.0 + float(npc_index % 2) * 8.0
-	var station_position: Vector2 = Vector2(station["position"])
-	return station_position + Vector2(cos(angle), sin(angle)) * radius
+func get_dock_point(station: Dictionary) -> Vector2:
+	var pos: Vector2 = station["position"]
+	return pos + Vector2(0.0, -26.0)
 
 
-func sync_npc_visuals() -> void:
-	for npc_index in range(npcs.size()):
-		var npc: Dictionary = npcs[npc_index]
-		var anchor_station_id: String = str(npc.get("anchor_station_id", npc.get("home_station_id", "")))
-		var anchor_station: Dictionary = get_station_by_id(anchor_station_id)
-		if anchor_station.is_empty() and not stations.is_empty():
-			anchor_station = stations[npc_index % stations.size()]
-			var fallback_id: String = str(anchor_station["id"])
-			npc["anchor_station_id"] = fallback_id
-			if not npc.has("home_station_id") or str(npc.get("home_station_id", "")).is_empty():
-				npc["home_station_id"] = fallback_id
-		if anchor_station.is_empty():
+# ─── Starfield generation ─────────────────────────────────────────────────────
+
+func generate_all_starfields() -> void:
+	for sys_id in SYSTEMS.keys():
+		generate_starfield_for_system(sys_id)
+
+
+func generate_starfield_for_system(sys_id: String) -> void:
+	var sys: Dictionary = SYSTEMS[sys_id]
+	var sfx_rng := RandomNumberGenerator.new()
+	sfx_rng.seed = DEFAULT_RNG_SEED + hash(sys_id)
+	var vp: Vector2 = get_viewport_rect().size
+	var r_base: float = float(sys["star_r_base"])
+	var g_base: float = float(sys["star_g_base"])
+	var b_base: float = float(sys["star_b_base"])
+	var star_list: Array = []
+	for i in range(STARFIELD_COUNT):
+		var sr: float = clampf(r_base + sfx_rng.randf_range(-0.22, 0.22), 0.0, 1.0)
+		var sg: float = clampf(g_base + sfx_rng.randf_range(-0.22, 0.22), 0.0, 1.0)
+		var sb: float = clampf(b_base + sfx_rng.randf_range(-0.22, 0.22), 0.0, 1.0)
+		var sa: float = sfx_rng.randf_range(0.28, 0.92)
+		var star_size: float = sfx_rng.randf_range(0.8, 2.5)
+		var twinkle_speed: float = sfx_rng.randf_range(0.6, 2.8)
+		var twinkle_offset: float = sfx_rng.randf_range(0.0, TAU)
+		star_list.append({
+			"pos": Vector2(sfx_rng.randf_range(0.0, vp.x), sfx_rng.randf_range(0.0, vp.y)),
+			"color": Color(sr, sg, sb, sa),
+			"size": star_size,
+			"twinkle_speed": twinkle_speed,
+			"twinkle_offset": twinkle_offset
+		})
+	all_stars[sys_id] = star_list
+
+
+# ─── Player Movement & System Transition ──────────────────────────────────────
+
+func handle_movement(delta: float) -> void:
+	var vp: Rect2 = get_viewport_rect()
+	var input_vec := Vector2.ZERO
+	if Input.is_action_pressed("move_right"):
+		input_vec.x += 1.0
+	if Input.is_action_pressed("move_left"):
+		input_vec.x -= 1.0
+	if Input.is_action_pressed("move_down"):
+		input_vec.y += 1.0
+	if Input.is_action_pressed("move_up"):
+		input_vec.y -= 1.0
+
+	var boosting: bool = Input.is_action_pressed("boost")
+	var max_speed: float = BASE_MAX_SPEED * (BOOST_MULTIPLIER if boosting else 1.0)
+
+	if input_vec.length_squared() > 0.0:
+		input_vec = input_vec.normalized()
+		player_velocity += input_vec * ACCELERATION * delta
+		if player_velocity.length() > max_speed:
+			player_velocity = player_velocity.normalized() * max_speed
+		player_rotation = lerp_angle(player_rotation, atan2(input_vec.y, input_vec.x), 12.0 * delta)
+	else:
+		player_velocity = player_velocity.move_toward(Vector2.ZERO, DRAG * delta)
+
+	player_position += player_velocity * delta
+
+	# Check for map edge transitions
+	var sys: Dictionary = SYSTEMS[current_system_id]
+	var neighbors: Dictionary = sys["neighbors"]
+	var margin: float = TRANSIT_ZONE
+
+	if player_position.y < margin and str(neighbors["north"]) != "":
+		_start_system_transition("north", str(neighbors["north"]))
+		return
+	if player_position.x > vp.size.x - margin and str(neighbors["east"]) != "":
+		_start_system_transition("east", str(neighbors["east"]))
+		return
+	if player_position.y > vp.size.y - margin and str(neighbors["south"]) != "":
+		_start_system_transition("south", str(neighbors["south"]))
+		return
+	if player_position.x < margin and str(neighbors["west"]) != "":
+		_start_system_transition("west", str(neighbors["west"]))
+		return
+
+	# Clamp to viewport (no neighbor in that direction)
+	player_position.x = clampf(player_position.x, 4.0, vp.size.x - 4.0)
+	player_position.y = clampf(player_position.y, 4.0, vp.size.y - 4.0)
+
+
+func _start_system_transition(direction: String, dest_system: String) -> void:
+	if is_transitioning:
+		return
+	is_transitioning = true
+	transition_direction = direction
+	transition_dest_system = dest_system
+	transition_progress = 0.0
+	transition_switched = false
+	player_velocity = Vector2.ZERO
+
+
+func update_system_transition(delta: float) -> void:
+	if not is_transitioning:
+		return
+
+	transition_progress += delta / TRANSITION_DURATION
+
+	if transition_progress >= 0.5 and not transition_switched:
+		transition_switched = true
+		current_system_id = transition_dest_system
+		var vp: Rect2 = get_viewport_rect()
+		match transition_direction:
+			"north":
+				player_position = Vector2(player_position.x, vp.size.y - TRANSIT_ZONE - 10.0)
+			"south":
+				player_position = Vector2(player_position.x, TRANSIT_ZONE + 10.0)
+			"east":
+				player_position = Vector2(TRANSIT_ZONE + 10.0, player_position.y)
+			"west":
+				player_position = Vector2(vp.size.x - TRANSIT_ZONE - 10.0, player_position.y)
+
+	if transition_progress >= 1.0:
+		is_transitioning = false
+		transition_progress = 0.0
+		transition_direction = ""
+		var sys_name: String = str(SYSTEMS[current_system_id]["display_name"])
+		status = "Willkommen im Sternensystem " + sys_name + "!"
+		show_toast("Eingeflogen: " + sys_name, 2.5)
+		generate_starfield_for_system(current_system_id)
+
+
+func draw_transition_overlay() -> void:
+	var vp: Rect2 = get_viewport_rect()
+	var p: float = clampf(transition_progress, 0.0, 1.0)
+	var alpha: float = 0.0
+	if p < 0.5:
+		alpha = p * 2.0
+	else:
+		alpha = (1.0 - p) * 2.0
+	draw_rect(vp, Color(0.0, 0.0, 0.0, alpha))
+
+
+# ─── Docking ──────────────────────────────────────────────────────────────────
+
+func update_docking(delta: float) -> void:
+	var dock_held: bool = Input.is_action_pressed("dock")
+	var nearest: Dictionary = find_nearest_station_in_system()
+	if nearest.is_empty():
+		docking_progress = 0.0
+		was_dock_held = false
+		return
+
+	var dist: float = player_position.distance_to(nearest["position"])
+	if dist > DOCK_RANGE:
+		docking_progress = 0.0
+		was_dock_held = false
+		return
+
+	if dock_held:
+		docking_progress += delta
+		if not was_dock_held:
+			status = "Halte C gedrückt um anzudocken..."
+		if docking_progress >= DOCK_HOLD_TIME:
+			complete_docking(nearest)
+	else:
+		docking_progress = 0.0
+		was_dock_held = false
+
+	was_dock_held = dock_held
+
+
+func complete_docking(station: Dictionary) -> void:
+	is_docked = true
+	docking_station = station
+	docking_progress = 0.0
+	was_dock_held = false
+	ensure_resource_selected()
+	var sname: String = str(station["display_name"])
+	var stype: String = str(STATION_TYPES[str(station["type_id"])]["display_name"])
+	status = "Angedockt: " + sname + " (" + stype + ")"
+	show_toast("Angedockt: " + sname, 1.8)
+
+
+func find_nearest_station_in_system() -> Dictionary:
+	var best: Dictionary = {}
+	var best_dist := INF
+	for station in stations:
+		if str(station["system_id"]) != current_system_id:
 			continue
-		npc["route_from_id"] = ""
-		npc["route_to_id"] = ""
-		npc["travel_progress"] = 1.0
-		npc["cargo_resource_id"] = ""
-		npc["visual_position"] = get_station_npc_anchor(anchor_station, npc_index)
-		npc["visual_rotation"] = 0.0
+		var d: float = player_position.distance_to(station["position"])
+		if d < best_dist:
+			best_dist = d
+			best = station
+	return best
 
 
-func start_npc_visual_route(npc: Dictionary, npc_index: int, from: Dictionary, to: Dictionary, resource_id: String) -> void:
-	# Use the NPC's current visual position as the start so it never teleports.
-	var cur_pos: Vector2 = Vector2(npc.get("visual_position", get_station_npc_anchor(from, npc_index)))
-	var end_pos: Vector2 = get_station_npc_anchor(to, npc_index)
-	var distance: float = cur_pos.distance_to(end_pos)
-	var from_id: String = str(from["id"])
-	var to_id: String = str(to["id"])
-	npc["anchor_station_id"] = to_id
-	npc["route_from_id"] = from_id
-	npc["route_to_id"] = to_id
-	npc["travel_progress"] = 0.0
-	npc["travel_time"] = clampf(distance / NPC_VISUAL_SPEED, NPC_VISUAL_MIN_TRAVEL, NPC_VISUAL_MAX_TRAVEL)
-	npc["route_start_pos"] = cur_pos
-	npc["visual_rotation"] = (end_pos - cur_pos).angle()
-	npc["cargo_resource_id"] = resource_id
-
-
-func update_npc_visuals(delta: float) -> void:
-	for npc_index in range(npcs.size()):
-		var npc: Dictionary = npcs[npc_index]
-		var route_from_id: String = str(npc.get("route_from_id", ""))
-		var route_to_id: String = str(npc.get("route_to_id", ""))
-		var travel_progress: float = float(npc.get("travel_progress", 1.0))
-
-		if not route_from_id.is_empty() and not route_to_id.is_empty() and travel_progress < 1.0:
-			var from_station: Dictionary = get_station_by_id(route_from_id)
-			var to_station: Dictionary = get_station_by_id(route_to_id)
-			if from_station.is_empty() or to_station.is_empty():
-				npc["route_from_id"] = ""
-				npc["route_to_id"] = ""
-				npc["travel_progress"] = 1.0
-				npc["cargo_resource_id"] = ""
-				continue
-
-			var travel_time: float = maxf(0.001, float(npc.get("travel_time", NPC_VISUAL_MIN_TRAVEL)))
-			travel_progress = minf(1.0, travel_progress + delta / travel_time)
-			var eased: float = travel_progress * travel_progress * (3.0 - 2.0 * travel_progress)
-			# Use the stored route_start_pos so the NPC travels from where it
-			# actually was when the route began, avoiding visual teleportation.
-			var start_pos: Vector2 = Vector2(npc.get("route_start_pos", get_station_npc_anchor(from_station, npc_index)))
-			var end_pos: Vector2 = get_station_npc_anchor(to_station, npc_index)
-			npc["visual_position"] = start_pos.lerp(end_pos, eased)
-			npc["visual_rotation"] = (end_pos - start_pos).angle()
-			npc["travel_progress"] = travel_progress
-
-			if travel_progress >= 1.0:
-				# Phase 3 – NPC sells its cargo on arrival
-				var npc_state: String = str(npc.get("state", "idle"))
-				var cr_id: String = str(npc.get("cargo_resource_id", ""))
-				var c_amount: int = int(npc.get("cargo_amount", 0))
-				if npc_state == "traveling_to_sell" and c_amount > 0 and not cr_id.is_empty() and RESOURCES.has(cr_id):
-					var dest_id: String = str(npc.get("destination_station_id", npc.get("anchor_station_id", "")))
-					var dest: Dictionary = get_station_by_id(dest_id)
-					var npc_inv: Dictionary = npc.get("inventory", {})
-					if not dest.is_empty() and not npc_inv.is_empty():
-						var sell_price: int = get_station_sell_price(dest, cr_id)
-						var ok: bool = agent_sell_to_station(npc, npc_inv, dest, cr_id, c_amount)
-						if ok:
-							var res: Dictionary = RESOURCES[cr_id]
-							add_trade_log("NPC %s: Verkauft %d %s @ %d bei %s (Kontostand: %d cr)" % [
-								str(npc.get("name", "NPC")), c_amount, str(res["display_name"]),
-								sell_price, str(dest["name"]), int(npc.get("credits", 0))])
-				npc["state"] = "idle"
-				npc["cargo_amount"] = 0
-				npc["destination_station_id"] = ""
-				npc["route_from_id"] = ""
-				npc["route_to_id"] = ""
-				npc["cargo_resource_id"] = ""
-			continue
-
-		var anchor_station_id: String = str(npc.get("anchor_station_id", npc.get("home_station_id", "")))
-		var anchor_station: Dictionary = get_station_by_id(anchor_station_id)
-		if anchor_station.is_empty() and not stations.is_empty():
-			anchor_station = stations[npc_index % stations.size()]
-			npc["anchor_station_id"] = str(anchor_station["id"])
-		if anchor_station.is_empty():
-			continue
-		var anchor_pos: Vector2 = get_station_npc_anchor(anchor_station, npc_index)
-		var idle_phase: float = float(npc.get("idle_phase", 0.0))
-		var idle_angle: float = visual_time * NPC_IDLE_SPEED + idle_phase
-		var idle_offset: Vector2 = Vector2(cos(idle_angle), sin(idle_angle * NPC_IDLE_SWAY_RATIO)) * NPC_IDLE_RADIUS
-		npc["visual_position"] = anchor_pos + idle_offset
-		if idle_offset.length_squared() > 0.0001:
-			npc["visual_rotation"] = idle_offset.angle()
-
-# ─── Economy ──────────────────────────────────────────────────────────────────
+# ─── Economy tick ─────────────────────────────────────────────────────────────
 
 func tick_economy() -> void:
 	for station in stations:
-		var stype: Dictionary = STATION_TYPES[station["type_id"]]
-		for resource_id in RESOURCE_IDS:
-			var amount: int = get_inventory_amount(station["inventory"], resource_id)
-			var drift: int = rng.randi_range(-1, 1)
-			if stype["production"].has(resource_id):
-				drift += stype["production"][resource_id]
-			if stype["consumption"].has(resource_id):
-				drift -= stype["consumption"][resource_id]
-			set_inventory_amount(station["inventory"], resource_id, maxi(0, amount + drift))
-		station["event_mod"] = clampf(station["event_mod"] + rng.randf_range(-0.006, 0.006), -0.2, 0.2)
-		trim_inventory_to_capacity(station["inventory"])
+		var stype: Dictionary = STATION_TYPES[str(station["type_id"])]
+		var inv: Dictionary = station["inventory"]
+		var stacks: Dictionary = inv["stacks"]
+		var cap: int = int(inv["capacity"])
 
-# ─── NPC Trading ──────────────────────────────────────────────────────────────
+		# Production
+		var prod: Dictionary = stype["production"]
+		for rid in prod.keys():
+			var amt: int = int(prod[rid])
+			stacks[rid] = mini(stacks.get(rid, 0) + amt, cap)
 
-func run_npc_trades() -> void:
-	if stations.size() < 2:
-		return
-	for npc_index in range(npcs.size()):
-		var npc: Dictionary = npcs[npc_index]
-		# Only idle NPCs start new trades
-		var npc_state: String = str(npc.get("state", "idle"))
-		if npc_state != "idle":
-			continue
-		if rng.randf() > float(npc["efficiency"]):
-			continue
-		var route = find_npc_route(npc)
-		if route == null:
-			continue
-		var resource_id: String = route["resource_id"]
-		var from: Dictionary = route["from"]
-		var to: Dictionary = route["to"]
-		var amount: int = route["amount"]
-		var npc_inv: Dictionary = npc["inventory"]
-		var vol: int = int(RESOURCES[resource_id]["volume_per_unit"])
-		amount = mini(amount, get_inventory_amount(from["inventory"], resource_id))
-		amount = mini(amount, get_available_capacity(npc_inv) / vol)
-		if amount <= 0:
-			continue
-		# Phase 1 – NPC buys cargo from the source station
-		var ok: bool = agent_buy_from_station(npc, npc_inv, from, resource_id, amount)
-		if not ok:
-			continue
-		npc["cargo_amount"] = amount
-		npc["state"] = "traveling_to_sell"
-		npc["destination_station_id"] = str(to["id"])
-		start_npc_visual_route(npc, npc_index, from, to, resource_id)
-		var res: Dictionary = RESOURCES[resource_id]
-		var buy_price: int = get_station_buy_price(from, resource_id)
-		add_trade_log("NPC %s: Kauft %d %s @ %d von %s" % [str(npc["name"]), amount, str(res["display_name"]), buy_price, str(from["name"])])
+		# Consumption
+		var cons: Dictionary = stype["consumption"]
+		for rid in cons.keys():
+			var amt: int = int(cons[rid])
+			var have: int = stacks.get(rid, 0)
+			stacks[rid] = maxi(0, have - amt)
+
+		# Gentle mean-reversion to target stock
+		var target_stock: Dictionary = stype["target_stock"]
+		for rid in RESOURCE_IDS:
+			if target_stock.has(rid):
+				var tgt: int = int(target_stock[rid])
+				var cur: int = stacks.get(rid, 0)
+				if cur < tgt and cur < cap:
+					stacks[rid] = cur + 1
+				elif cur > tgt + 12:
+					stacks[rid] = cur - 1
 
 
-func find_npc_route(npc: Dictionary):
-	var npc_credits: int = int(npc.get("credits", 0))
-	var npc_inv: Dictionary = npc.get("inventory", {})
-	var npc_free: int = get_available_capacity(npc_inv) if not npc_inv.is_empty() else int(npc.get("cargo_capacity", 20))
-	var best_trade_score: float = 0.0
-	var best = null
-	for resource_id in RESOURCE_IDS:
-		var vol: int = int(RESOURCES[resource_id]["volume_per_unit"])
-		for from in stations:
-			for to in stations:
-				if from["id"] == to["id"]:
-					continue
-				var buy_price: int = get_station_buy_price(from, resource_id)
-				var sell_price: int = get_station_sell_price(to, resource_id)
-				var unit_profit: float = float(sell_price - buy_price)
-				if unit_profit < 2.0:
-					continue
-				var max_amount: int = mini(get_inventory_amount(from["inventory"], resource_id), npc_free / vol)
-				max_amount = mini(max_amount, get_available_capacity(to["inventory"]) / vol)
-				if buy_price > 0:
-					max_amount = mini(max_amount, npc_credits / buy_price)
-				var amount: int = maxi(0, int(round(float(max_amount) * rng.randf_range(NPC_MIN_TRADE_RATIO, NPC_MAX_TRADE_RATIO))))
-				if amount <= 0:
-					continue
-				var trade_score: float = unit_profit * float(amount)
-				if trade_score <= best_trade_score:
-					continue
-				best_trade_score = trade_score
-				best = {"resource_id": resource_id, "from": from, "to": to, "amount": amount}
-	return best
-
-# ─── Pricing ──────────────────────────────────────────────────────────────────
-
-func get_station_buy_price(station: Dictionary, resource_id: String) -> int:
-	return ceili(calculate_base_price(station, resource_id) * BUY_MARKUP)
-
-
-func get_station_sell_price(station: Dictionary, resource_id: String) -> int:
-	return maxi(1, floori(calculate_base_price(station, resource_id) * SELL_MARKDOWN))
-
-
-func calculate_base_price(station: Dictionary, resource_id: String) -> float:
+func compute_price(station: Dictionary, resource_id: String, is_buy: bool) -> float:
 	var res: Dictionary = RESOURCES[resource_id]
-	var target: int = maxi(1, station["target_stock"][resource_id])
-	var current: int = get_inventory_amount(station["inventory"], resource_id)
-	var pressure: float = clampf(float(target - current) / float(target), PRESSURE_CLAMP_MIN, PRESSURE_CLAMP_MAX)
-	var tier_bonus: float = 1.0 + 0.1 * (float(res["tier"]) - 1.0)
-	var volatility: float = 1.0 + pressure * PRESSURE_PRICE_FACTOR + float(station["event_mod"])
-	var distance_factor: float = 1.0 + float(station["distance"]) * DISTANCE_PRICE_FACTOR
-	var raw: float = res["base_price"] * tier_bonus * volatility * distance_factor
-	return clampf(raw, res["base_price"] * MIN_PRICE_MULTIPLIER, res["base_price"] * MAX_PRICE_MULTIPLIER)
+	var stype: Dictionary = STATION_TYPES[str(station["type_id"])]
+	var base: float = float(res["base_price"])
+	var inv: Dictionary = station["inventory"]
+	var stacks: Dictionary = inv["stacks"]
+	var cur: int = stacks.get(resource_id, 0)
+	var target_stock: Dictionary = stype["target_stock"]
+	var tgt: int = int(target_stock.get(resource_id, 10))
+	var cap: int = int(inv["capacity"])
 
+	var pressure := 0.0
+	if tgt > 0:
+		pressure = (float(tgt) - float(cur)) / float(tgt)
+	pressure = clampf(pressure, PRESSURE_CLAMP_MIN, PRESSURE_CLAMP_MAX)
 
-func get_stock_state(station: Dictionary, resource_id: String) -> String:
-	var target: int = maxi(1, station["target_stock"][resource_id])
-	var ratio: float = float(get_inventory_amount(station["inventory"], resource_id)) / float(target)
-	if ratio < VERY_HIGH_DEMAND_RATIO: return "Sehr gefragt"
-	if ratio < LOW_STOCK_RATIO: return "Knapp"
-	if ratio > OVERSTOCK_RATIO: return "Überschuss"
-	return "Stabil"
+	var anchor_pos: Vector2 = Vector2(576.0, 324.0)
+	var dist: float = station["position"].distance_to(anchor_pos)
+	var dist_factor: float = dist * DISTANCE_PRICE_FACTOR
 
+	var multiplier: float = 1.0 + pressure * PRESSURE_PRICE_FACTOR + dist_factor * 0.1
+	multiplier = clampf(multiplier, MIN_PRICE_MULTIPLIER, MAX_PRICE_MULTIPLIER)
 
-func get_stock_ratio(station: Dictionary, resource_id: String) -> float:
-	var target_stock: Dictionary = station.get("target_stock", {})
-	var target: int = maxi(1, int(target_stock.get(resource_id, 1)))
-	var current: int = get_inventory_amount(station["inventory"], resource_id)
-	return float(current) / float(target)
-
-
-# ─── Trade ────────────────────────────────────────────────────────────────────
-
-# Shared agent trade helpers — used identically for player and NPCs.
-# agent_dict must contain a "credits" key (int).
-# agent_inv is the agent's inventory dict (with "capacity" and "stacks").
-
-func agent_buy_from_station(agent_dict: Dictionary, agent_inv: Dictionary, station: Dictionary, resource_id: String, amount: int) -> bool:
-	if amount <= 0:
-		return false
-	var price: int = get_station_buy_price(station, resource_id)
-	var cost: int = amount * price
-	var agent_creds: int = int(agent_dict.get("credits", 0))
-	if agent_creds < cost:
-		return false
-	if get_inventory_amount(station["inventory"], resource_id) < amount:
-		return false
-	var res: Dictionary = RESOURCES[resource_id]
-	var vol: int = int(res["volume_per_unit"])
-	if get_available_capacity(agent_inv) < amount * vol:
-		return false
-	agent_dict["credits"] = agent_creds - cost
-	remove_from_inventory(station["inventory"], resource_id, amount)
-	add_to_inventory(agent_inv, resource_id, amount)
-	return true
-
-
-func agent_sell_to_station(agent_dict: Dictionary, agent_inv: Dictionary, station: Dictionary, resource_id: String, amount: int) -> bool:
-	if amount <= 0:
-		return false
-	if get_inventory_amount(agent_inv, resource_id) < amount:
-		return false
-	var res: Dictionary = RESOURCES[resource_id]
-	var vol: int = int(res["volume_per_unit"])
-	if get_available_capacity(station["inventory"]) < amount * vol:
-		return false
-	var sell_price: int = get_station_sell_price(station, resource_id)
-	var gain: int = amount * sell_price
-	agent_dict["credits"] = int(agent_dict.get("credits", 0)) + gain
-	remove_from_inventory(agent_inv, resource_id, amount)
-	add_to_inventory(station["inventory"], resource_id, amount)
-	return true
-
-
-func handle_left_click(pos: Vector2) -> void:
-	if not is_docked or docking_station == null:
-		return
-	var control_id: String = get_control_id_at(pos)
-	if control_id.is_empty():
-		return
-
-	trigger_control_feedback(control_id)
-	play_ui_click()
-
-	match control_id:
-		"buy":
-			attempt_trade(true)
-		"sell":
-			attempt_trade(false)
-		"plus_one":
-			quantity = mini(999, quantity + 1)
-		"plus_five":
-			quantity = mini(999, quantity + 5)
-		"max":
-			quantity = maxi(1, calc_max_buy(selected_resource_id, docking_station))
-		"sell_all":
-			quantity = maxi(1, get_inventory_amount(player_agent["inventory"], selected_resource_id))
-			attempt_trade(false)
-		"sort":
-			cycle_sort()
-		"dir":
-			sort_ascending = not sort_ascending
-		_:
-			if control_id.begins_with("resource:"):
-				selected_resource_id = control_id.trim_prefix("resource:")
-
-
-func attempt_trade(buy: bool) -> void:
-	if docking_station == null:
-		return
-	var resource_id := selected_resource_id
-	var amount := maxi(1, quantity)
-	var res: Dictionary = RESOURCES[resource_id]
-
-	if buy:
-		var price: int = get_station_buy_price(docking_station, resource_id)
-		var cost: int = amount * price
-		if int(player_agent["credits"]) < cost: fail_trade("Nicht genug Credits."); return
-		if get_inventory_amount(docking_station["inventory"], resource_id) < amount: fail_trade("Station hat zu wenig Bestand."); return
-		if get_available_capacity(player_agent["inventory"]) < amount * int(res["volume_per_unit"]): fail_trade("Nicht genug Frachtraum."); return
-		agent_buy_from_station(player_agent, player_agent["inventory"], docking_station, resource_id, amount)
-		update_average_buy(resource_id, amount, price)
-		add_trade_log("Gekauft: %d [%s] %s @ %d von %s" % [amount, get_resource_short_label(resource_id), res["display_name"], price, docking_station["name"]])
-		success_trade("Kauf erfolgreich.")
-		return
-
-	var sell_price: int = get_station_sell_price(docking_station, resource_id)
-	if get_inventory_amount(player_agent["inventory"], resource_id) < amount: fail_trade("Ressource fehlt im Inventar."); return
-	if get_available_capacity(docking_station["inventory"]) < amount * int(res["volume_per_unit"]): fail_trade("Stationslager ist voll."); return
-	var sell_ok: bool = agent_sell_to_station(player_agent, player_agent["inventory"], docking_station, resource_id, amount)
-	if not sell_ok:
-		fail_trade("Verkauf fehlgeschlagen.")
-		return
-	add_trade_log("Verkauft: %d [%s] %s @ %d an %s" % [amount, get_resource_short_label(resource_id), res["display_name"], sell_price, docking_station["name"]])
-	success_trade("Verkauf erfolgreich.")
-
-# ─── Drawing ──────────────────────────────────────────────────────────────────
-
-func draw_background() -> void:
-	var viewport_size := get_viewport_rect().size
-	draw_rect(Rect2(Vector2.ZERO, viewport_size), Color(0.01, 0.02, 0.07), true)
-	draw_circle(viewport_size * 0.75, 220.0, Color(0.08, 0.05, 0.16, 0.38))
-	draw_circle(viewport_size * Vector2(0.2, 0.85), 180.0, Color(0.06, 0.08, 0.2, 0.28))
-	for star in stars:
-		var pulse := 0.75 + 0.25 * sin(visual_time * star["speed"] + star["phase"])
-		var c: Color = star["color"]
-		c.a *= pulse
-		draw_circle(star["pos"], star["size"], c)
-
-
-func draw_station_node(station: Dictionary, index: int) -> void:
-	var pulse := 0.84 + 0.16 * sin(visual_time * 1.4 + float(index))
-	var radius := 22.0 + 2.5 * sin(visual_time + float(index))
-	var station_pos: Vector2 = Vector2(station["position"])
-	draw_circle(station_pos, radius, STATION_COLOR * pulse)
-
-	if index % 2 == 0:
-		draw_arc(station_pos, radius + 8.0, 0.0, TAU, 48, Color(0.55, 0.9, 1.0, 0.65), 2.5)
+	var price: float = base * multiplier
+	if is_buy:
+		price *= BUY_MARKUP
 	else:
-		draw_arc(station_pos, radius + 9.0, visual_time * 0.2, visual_time * 0.2 + TAU, 24, Color(0.7, 0.9, 1.0, 0.7), 2.4)
-
-	var focus := selected_resource_id if RESOURCES.has(selected_resource_id) else DEFAULT_RESOURCE_ID
-
-	draw_string(ThemeDB.fallback_font, station_pos + Vector2(-64.0, -34.0), station["name"], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 14)
-	draw_string(ThemeDB.fallback_font, station_pos + Vector2(-64.0, 46.0),
-		"Buy %d / Sell %d" % [get_station_buy_price(station, focus), get_station_sell_price(station, focus)],
-		HORIZONTAL_ALIGNMENT_LEFT, -1.0, 13)
-
-	var dock_point := get_dock_point(station)
-	draw_line(station_pos, dock_point, Color(0.6, 0.95, 1.0, 0.7), 2.0)
-	draw_circle(dock_point, 5.0, Color(0.8, 1.0, 1.0, 0.8))
+		price *= SELL_MARKDOWN
+	return maxf(1.0, price)
 
 
-func draw_npc_markers() -> void:
-	for npc_index in range(npcs.size()):
-		var npc: Dictionary = npcs[npc_index]
-		var marker_pos: Vector2 = Vector2(npc["visual_position"])
-		var rotation: float = float(npc.get("visual_rotation", 0.0))
-		var cargo_resource_id: String = str(npc.get("cargo_resource_id", ""))
-		draw_npc_ship(marker_pos, rotation, cargo_resource_id)
-		draw_string(ThemeDB.fallback_font, marker_pos + Vector2(10.0, 4.0), npc["name"], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 10)
+func compute_buy_price(station: Dictionary, resource_id: String) -> float:
+	return compute_price(station, resource_id, true)
 
 
-func draw_ship() -> void:
-	var forward := Vector2.RIGHT.rotated(player_rotation)
-	var side := forward.rotated(PI * 0.5)
-	var nose := player_position + forward * 13.0
-	var left := player_position - forward * 8.0 + side * 8.0
-	var right := player_position - forward * 8.0 - side * 8.0
-	var tail := player_position - forward * 11.0
-	draw_line(nose, left, PLAYER_COLOR, 2.0)
-	draw_line(left, tail, PLAYER_COLOR, 2.0)
-	draw_line(tail, right, PLAYER_COLOR, 2.0)
-	draw_line(right, nose, PLAYER_COLOR, 2.0)
-	draw_circle(player_position + forward * 1.5, 3.4, Color(0.5, 0.85, 1.0, 0.95))
+func compute_sell_price(station: Dictionary, resource_id: String) -> float:
+	return compute_price(station, resource_id, false)
 
 
-func draw_own_station() -> void:
-	draw_circle(player_position, 14.0, Color(0.78, 0.86, 1.0, 0.95))
-	draw_arc(player_position, 22.0, 0.0, TAU, 40, Color(0.88, 0.95, 1.0, 0.9), 2.5)
-	draw_string(ThemeDB.fallback_font, player_position + Vector2(16.0, 4.0), "HQ", HORIZONTAL_ALIGNMENT_LEFT, -1.0, 12)
-
-
-func draw_trade_interface(station: Dictionary) -> void:
-	var size := get_viewport_rect().size
-	var panel_height := minf(340.0, size.y - 120.0)
-	var panel_top := size.y - panel_height - 20.0
-
-	var left := Rect2(Vector2(18.0, panel_top), Vector2(size.x * 0.34 - 24.0, panel_height))
-	var middle := Rect2(Vector2(left.end.x + 10.0, panel_top), Vector2(size.x * 0.31 - 16.0, panel_height))
-	var right := Rect2(Vector2(middle.end.x + 10.0, panel_top), Vector2(size.x - (middle.end.x + 28.0), panel_height))
-
-	draw_panel(left, "Spielerschiff")
-	draw_panel(middle, "Handel")
-	draw_panel(right, "%s · %s" % [station["name"], STATION_TYPES[station["type_id"]]["display_name"]])
-
-	draw_player_panel(left, station)
-	draw_trade_panel(middle, station)
-	draw_station_panel(right, station)
-
-
-func draw_panel(rect: Rect2, title: String) -> void:
-	draw_rect(rect, PANEL_COLOR, true)
-	draw_rect(rect, PANEL_BORDER, false, 2.0)
-	draw_string(ThemeDB.fallback_font, rect.position + Vector2(12.0, 24.0), title, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 16)
-
-
-func draw_player_panel(rect: Rect2, station: Dictionary) -> void:
-	draw_string(ThemeDB.fallback_font, rect.position + Vector2(12.0, 48.0), "Credits: %d" % int(player_agent["credits"]), HORIZONTAL_ALIGNMENT_LEFT, -1.0, 14, CREDIT_COLOR)
-	draw_string(ThemeDB.fallback_font, rect.position + Vector2(12.0, 68.0), "Cargo: %d / %d" % [get_used_capacity(player_agent["inventory"]), int(player_agent["inventory"]["capacity"])], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 13)
-	draw_string(ThemeDB.fallback_font, rect.position + Vector2(12.0, 88.0), "Inventarwert: %d cr" % get_inventory_value(player_agent["inventory"], station, false), HORIZONTAL_ALIGNMENT_LEFT, -1.0, 13)
-	draw_string(ThemeDB.fallback_font, rect.position + Vector2(12.0, 108.0), "Suche: %s" % ("(leer)" if search.is_empty() else search), HORIZONTAL_ALIGNMENT_LEFT, -1.0, 12)
-
-	sort_rect = Rect2(rect.position + Vector2(10.0, 114.0), Vector2(rect.size.x * 0.58, 22.0))
-	dir_rect = Rect2(rect.position + Vector2(14.0 + rect.size.x * 0.58, 114.0), Vector2(rect.size.x * 0.34 - 20.0, 22.0))
-	register_control_rect("sort", sort_rect)
-	register_control_rect("dir", dir_rect)
-	draw_rect(sort_rect, get_control_color(CONTROL_BG_COLOR, "sort"), true)
-	draw_rect(dir_rect, get_control_color(CONTROL_BG_COLOR, "dir"), true)
-	draw_string(ThemeDB.fallback_font, sort_rect.position + Vector2(6.0, 15.0), "Sort: %s" % sort_label(sort_key), HORIZONTAL_ALIGNMENT_LEFT, -1.0, 12)
-	draw_string(ThemeDB.fallback_font, dir_rect.position + Vector2(6.0, 15.0), "Dir: %s" % ("Auf" if sort_ascending else "Ab"), HORIZONTAL_ALIGNMENT_LEFT, -1.0, 12)
-
-	# Always show all resources so the player can see every cargo slot and
-	# select any resource for trading even when carrying nothing.
-	var rows: Array = get_all_resource_rows(player_agent["inventory"], station, false)
-	var start_y: float = rect.position.y + 146.0
-
-	for i in range(mini(rows.size(), 7)):
-		var row_rect: Rect2 = Rect2(Vector2(rect.position.x + 10.0, start_y + float(i) * 28.0), Vector2(rect.size.x - 20.0, 24.0))
-		draw_row(rows[i], row_rect, false, station)
-
-
-func draw_station_panel(rect: Rect2, station: Dictionary) -> void:
-	draw_string(ThemeDB.fallback_font, rect.position + Vector2(12.0, 48.0), "Lager: %d / %d" % [get_used_capacity(station["inventory"]), station["inventory"]["capacity"]], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 13)
-	draw_string(ThemeDB.fallback_font, rect.position + Vector2(12.0, 68.0), "Ziel: ausgeglichener Warenmix", HORIZONTAL_ALIGNMENT_LEFT, -1.0, 12)
-
-	# Always show all resources so the player can select and inspect any
-	# tradeable good, including those temporarily out of stock.
-	var rows: Array = get_all_resource_rows(station["inventory"], station, true)
-	var start_y: float = rect.position.y + 92.0
-
-	for i in range(mini(rows.size(), 8)):
-		var row_rect: Rect2 = Rect2(Vector2(rect.position.x + 10.0, start_y + i * 28.0), Vector2(rect.size.x - 20.0, 24.0))
-		draw_row(rows[i], row_rect, true, station)
-
-
-func draw_row(row: Dictionary, rect: Rect2, station_row: bool, station: Dictionary) -> void:
-	var resource_id: String = str(row["resource_id"])
-	var res: Dictionary = RESOURCES[resource_id]
-	var selected: bool = selected_resource_id == resource_id
-	var control_id: String = "resource:%s" % resource_id
-	var is_empty: bool = int(row["amount"]) <= 0
-	var bg_color: Color = ROW_SELECTED_BG if selected else ROW_DEFAULT_BG
-	if is_control_hovered(control_id):
-		bg_color = ROW_HOVER_BG if not selected else ROW_SELECTED_BG.lightened(0.12)
-	if is_control_active(control_id):
-		bg_color = ROW_PRESS_BG
-	# Dim empty slots so they are visually distinguishable but still clickable.
-	if is_empty and not selected:
-		bg_color = bg_color.darkened(0.35)
-
-	draw_rect(rect, bg_color, true)
-	draw_rect(rect, PANEL_BORDER if selected else ROW_DEFAULT_BORDER, false, 1.0)
-
-	var icon_rect: Rect2 = Rect2(rect.position + Vector2(3.0, 2.0), Vector2(20.0, 20.0))
-	draw_rect(icon_rect, ICON_BG_COLOR, true)
-	draw_rect(icon_rect, TIER_BORDER_COLOR[int(res["tier"])], false, 2.0)
-	draw_resource_icon(icon_rect, resource_id)
-
-	var text_color: Color = Color(0.7, 0.7, 0.7) if is_empty else Color.WHITE
-	draw_string(ThemeDB.fallback_font, rect.position + Vector2(28.0, 14.0), "%s T%d" % [str(res["display_name"]), int(res["tier"])], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 12, text_color)
-	if is_empty:
-		# Show price info even for empty slots so the player can evaluate trades.
-		var unit_price: int = int(row["unit_price"])
-		var label: String = "Ausverkauft · %d cr/St" % unit_price if station_row else "Kein Bestand · %d cr/St" % unit_price
-		draw_string(ThemeDB.fallback_font, rect.position + Vector2(28.0, 23.0), label, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 10, text_color)
-	else:
-		draw_string(ThemeDB.fallback_font, rect.position + Vector2(28.0, 23.0), "Menge:%d Wert:%d Vol:%d" % [int(row["amount"]), int(row["total_value"]), int(row["total_volume"])], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 10)
-		if station_row:
-			draw_string(ThemeDB.fallback_font, rect.position + Vector2(rect.size.x - STOCK_STATE_OFFSET, 14.0), get_stock_state(station, resource_id), HORIZONTAL_ALIGNMENT_LEFT, -1.0, 10, STOCK_STATE_COLOR)
-
-	register_control_rect(control_id, rect)
-
-
-func draw_trade_panel(rect: Rect2, station: Dictionary) -> void:
-	var buy := get_station_buy_price(station, selected_resource_id)
-	var sell := get_station_sell_price(station, selected_resource_id)
-	var total_buy := buy * quantity
-	var total_sell := sell * quantity
-	var expected := calc_expected_profit(selected_resource_id, quantity, sell)
-	var res: Dictionary = RESOURCES[selected_resource_id]
-	var preview_rect := Rect2(rect.position + Vector2(rect.size.x - 42.0, 42.0), Vector2(28.0, 28.0))
-
-	draw_rect(preview_rect, ICON_BG_COLOR, true)
-	draw_rect(preview_rect, TIER_BORDER_COLOR[res["tier"]], false, 2.0)
-	draw_resource_icon(preview_rect, selected_resource_id)
-
-	draw_string(ThemeDB.fallback_font, rect.position + Vector2(12.0, 48.0), "Ressource: %s" % res["display_name"], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 14)
-	draw_string(ThemeDB.fallback_font, rect.position + Vector2(12.0, 70.0), "Menge: %d" % quantity, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 13)
-	draw_string(ThemeDB.fallback_font, rect.position + Vector2(12.0, 92.0), "Kaufpreis: %d  Verkauf: %d" % [buy, sell], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 12)
-	draw_string(ThemeDB.fallback_font, rect.position + Vector2(12.0, 112.0), "Gesamt Kauf/Verkauf: %d / %d" % [total_buy, total_sell], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 12)
-	draw_string(ThemeDB.fallback_font, rect.position + Vector2(12.0, 132.0), "Gewinn ggü. Ø Einkauf: %d" % expected, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 12, GOOD_COLOR if expected >= 0 else BAD_COLOR)
-
-	plus_one_rect = Rect2(rect.position + Vector2(12.0, 154.0), Vector2(46.0, 24.0))
-	plus_five_rect = Rect2(rect.position + Vector2(64.0, 154.0), Vector2(46.0, 24.0))
-	max_rect = Rect2(rect.position + Vector2(116.0, 154.0), Vector2(56.0, 24.0))
-	sell_all_rect = Rect2(rect.position + Vector2(178.0, 154.0), Vector2(120.0, 24.0))
-
-	draw_button(plus_one_rect, "+1", "plus_one")
-	draw_button(plus_five_rect, "+5", "plus_five")
-	draw_button(max_rect, "Max", "max")
-	draw_button(sell_all_rect, "Alles verkaufen", "sell_all")
-
-	buy_rect = Rect2(rect.position + Vector2(12.0, 188.0), Vector2(rect.size.x - 24.0, 34.0))
-	sell_rect = Rect2(rect.position + Vector2(12.0, 228.0), Vector2(rect.size.x - 24.0, 34.0))
-
-	register_control_rect("buy", buy_rect)
-	register_control_rect("sell", sell_rect)
-	draw_rect(buy_rect, get_control_color(BUY_BUTTON_COLOR, "buy"), true)
-	draw_rect(sell_rect, get_control_color(SELL_BUTTON_COLOR, "sell"), true)
-	draw_rect(buy_rect, PANEL_BORDER, false, 1.0)
-	draw_rect(sell_rect, PANEL_BORDER, false, 1.0)
-	draw_string(ThemeDB.fallback_font, buy_rect.position + Vector2(10.0, 22.0), "Kaufen", HORIZONTAL_ALIGNMENT_LEFT, -1.0, 16)
-	draw_string(ThemeDB.fallback_font, sell_rect.position + Vector2(10.0, 22.0), "Verkaufen", HORIZONTAL_ALIGNMENT_LEFT, -1.0, 16)
-
-	var needed_cargo: int = quantity * int(res["volume_per_unit"])
-	draw_string(ThemeDB.fallback_font, rect.position + Vector2(12.0, 280.0), "Credits: %d" % int(player_agent["credits"]), HORIZONTAL_ALIGNMENT_LEFT, -1.0, 12, CREDIT_COLOR)
-	draw_string(ThemeDB.fallback_font, rect.position + Vector2(12.0, 298.0), "Cargo frei / benötigt: %d / %d" % [get_available_capacity(player_agent["inventory"]), needed_cargo], HORIZONTAL_ALIGNMENT_LEFT, -1.0, 12)
-	draw_string(ThemeDB.fallback_font, rect.position + Vector2(12.0, 318.0), "Letzte Trades:", HORIZONTAL_ALIGNMENT_LEFT, -1.0, 11)
-	draw_string(ThemeDB.fallback_font, rect.position + Vector2(90.0, 318.0), recent_trades(), HORIZONTAL_ALIGNMENT_LEFT, -1.0, 11, TRADE_LOG_COLOR)
-
-
-func draw_button(rect: Rect2, text: String, control_id: String) -> void:
-	register_control_rect(control_id, rect)
-	draw_rect(rect, get_control_color(UI_BUTTON_BG, control_id), true)
-	draw_rect(rect, PANEL_BORDER, false, 1.0)
-	draw_string(ThemeDB.fallback_font, rect.position + Vector2(7.0, 16.0), text, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 12)
-
-
-func draw_toast() -> void:
-	var size := get_viewport_rect().size
-	var rect := Rect2(Vector2(size.x * 0.5 - 120.0, 22.0), Vector2(240.0, 30.0))
-	draw_rect(rect, TOAST_BG_COLOR, true)
-	draw_rect(rect, TOAST_BORDER_COLOR, false, 1.0)
-	draw_string(ThemeDB.fallback_font, rect.position + Vector2(10.0, 20.0), toast_text, HORIZONTAL_ALIGNMENT_LEFT, -1.0, 13)
-
-
-func draw_resource_icon(icon_rect: Rect2, resource_id: String) -> void:
-	var center: Vector2 = icon_rect.get_center()
-	var resource_color: Color = get_resource_color(resource_id)
-	var glow_rect: Rect2 = Rect2(icon_rect.position + Vector2(1.0, 1.0), icon_rect.size - Vector2(2.0, 2.0))
-	draw_rect(glow_rect, resource_color.darkened(0.72), true)
-	draw_rect(glow_rect, resource_color.lightened(0.12), false, 1.0)
-	match resource_id:
-		"wood":
-			var top_plank := Rect2(icon_rect.position + Vector2(3.0, 3.0), Vector2(icon_rect.size.x - 6.0, 4.0))
-			var mid_plank := Rect2(icon_rect.position + Vector2(4.0, 8.0), Vector2(icon_rect.size.x - 8.0, 4.0))
-			var bottom_plank := Rect2(icon_rect.position + Vector2(3.0, 13.0), Vector2(icon_rect.size.x - 6.0, 4.0))
-			draw_rect(top_plank, Color(0.86, 0.6, 0.28), true)
-			draw_rect(mid_plank, Color(0.74, 0.48, 0.2), true)
-			draw_rect(bottom_plank, Color(0.58, 0.37, 0.16), true)
-			draw_line(icon_rect.position + Vector2(7.0, 3.0), icon_rect.position + Vector2(7.0, 17.0), Color(0.97, 0.84, 0.62, 0.9), 1.0)
-			draw_line(icon_rect.position + Vector2(13.0, 3.0), icon_rect.position + Vector2(13.0, 17.0), Color(0.97, 0.84, 0.62, 0.85), 1.0)
-		"coal":
-			draw_circle(center + Vector2(-3.2, 2.4), 4.2, Color(0.31, 0.34, 0.4))
-			draw_circle(center + Vector2(2.0, -0.8), 4.4, Color(0.12, 0.15, 0.21))
-			draw_circle(center + Vector2(4.4, 4.2), 3.1, Color(0.41, 0.45, 0.52))
-			draw_circle(center + Vector2(-0.5, -3.8), 2.3, Color(0.72, 0.78, 0.92, 0.45))
-		"copper_plate":
-			var plate := Rect2(icon_rect.position + Vector2(3.0, 4.0), Vector2(14.0, 10.0))
-			draw_rect(plate, Color(0.9, 0.52, 0.23), true)
-			draw_rect(plate, Color(1.0, 0.75, 0.42), false, 1.0)
-			draw_line(plate.position + Vector2(0.0, 5.0), plate.position + Vector2(14.0, 5.0), Color(1.0, 0.7, 0.3), 1.0)
-			draw_circle(plate.position + Vector2(3.0, 2.0), 0.9, Color(1.0, 0.88, 0.64))
-			draw_circle(plate.position + Vector2(11.0, 8.0), 0.9, Color(1.0, 0.88, 0.64))
-		"plastic":
-			var points := PackedVector2Array([
-				center + Vector2(0.0, -6.4),
-				center + Vector2(5.8, -3.2),
-				center + Vector2(5.8, 3.2),
-				center + Vector2(0.0, 6.4),
-				center + Vector2(-5.8, 3.2),
-				center + Vector2(-5.8, -3.2)
-			])
-			var outline := PackedVector2Array(points)
-			outline.append(points[0])
-			draw_colored_polygon(points, Color(0.42, 0.9, 1.0))
-			draw_polyline(outline, Color(0.9, 0.98, 1.0), 1.2)
-			draw_line(center + Vector2(-2.8, -1.0), center + Vector2(2.8, 1.0), Color(0.96, 1.0, 1.0, 0.9), 1.0)
-		_:
-			draw_circle(center, 5.8, resource_color)
-	draw_string(ThemeDB.fallback_font, icon_rect.position + Vector2(3.0, icon_rect.size.y - 2.5), get_resource_short_label(resource_id), HORIZONTAL_ALIGNMENT_LEFT, -1.0, 7, Color(0.96, 0.98, 1.0))
-
-
-func draw_npc_ship(marker_pos: Vector2, rotation: float, cargo_resource_id: String) -> void:
-	var forward: Vector2 = Vector2.RIGHT.rotated(rotation)
-	var side: Vector2 = forward.rotated(PI * 0.5)
-	var nose: Vector2 = marker_pos + forward * 7.0
-	var left: Vector2 = marker_pos - forward * 4.8 + side * 4.2
-	var right: Vector2 = marker_pos - forward * 4.8 - side * 4.2
-	var hull: PackedVector2Array = PackedVector2Array([nose, left, marker_pos - forward * 2.2, right])
-	var outline: PackedVector2Array = PackedVector2Array([nose, left, marker_pos - forward * 2.2, right, nose])
-	draw_colored_polygon(hull, NPC_MARKER_COLOR)
-	draw_polyline(outline, Color(0.96, 0.99, 1.0, 0.95), 1.2)
-	draw_circle(marker_pos - forward * 1.0, 1.5, Color(0.08, 0.14, 0.22, 0.95))
-	if not cargo_resource_id.is_empty():
-		var cargo_color: Color = get_resource_color(cargo_resource_id)
-		draw_circle(marker_pos + side * 5.0, 2.0, cargo_color)
-		draw_circle(marker_pos + side * 5.0, 0.85, Color(0.98, 0.99, 1.0, 0.95))
-
-
-func get_resource_short_label(resource_id: String) -> String:
-	match resource_id:
-		"wood":
-			return "WD"
-		"coal":
-			return "CO"
-		"copper_plate":
-			return "CU"
-		"plastic":
-			return "PL"
-		_:
-			return "??"
-
-
-func get_resource_color(resource_id: String) -> Color:
-	match resource_id:
-		"wood":
-			return Color(0.82, 0.58, 0.27)
-		"coal":
-			return Color(0.46, 0.5, 0.58)
-		"copper_plate":
-			return Color(0.96, 0.6, 0.28)
-		"plastic":
-			return Color(0.38, 0.9, 1.0)
-		_:
-			return Color(0.78, 0.84, 0.96)
-
-
-func register_control_rect(control_id: String, rect: Rect2) -> void:
-	control_hit_rects.append({"id": control_id, "rect": rect})
-
-
-func get_control_id_at(pos: Vector2) -> String:
-	for i in range(control_hit_rects.size() - 1, -1, -1):
-		var hit: Dictionary = control_hit_rects[i]
-		var hit_rect: Rect2 = hit["rect"]
-		if hit_rect.has_point(pos):
-			return str(hit["id"])
+func get_stock_state_label(station: Dictionary, resource_id: String) -> String:
+	var stype: Dictionary = STATION_TYPES[str(station["type_id"])]
+	var inv: Dictionary = station["inventory"]
+	var stacks: Dictionary = inv["stacks"]
+	var cur: int = stacks.get(resource_id, 0)
+	var target_stock: Dictionary = stype["target_stock"]
+	var tgt: int = int(target_stock.get(resource_id, 10))
+	var cap: int = int(inv["capacity"])
+	if tgt <= 0:
+		return ""
+	var ratio: float = float(cur) / float(tgt)
+	if cur == 0:
+		return "Leer"
+	elif ratio < VERY_HIGH_DEMAND_RATIO:
+		return "Sehr hoch"
+	elif ratio < LOW_STOCK_RATIO:
+		return "Hoch"
+	elif ratio > OVERSTOCK_RATIO:
+		return "Überbestand"
 	return ""
 
 
-func update_hovered_control(play_sound: bool) -> void:
-	var next_control: String = get_control_id_at(mouse_position)
-	if next_control == hovered_control_id:
+func get_stock_state_color(label: String) -> Color:
+	match label:
+		"Leer", "Sehr hoch":
+			return BAD_COLOR
+		"Hoch":
+			return Color(1.0, 0.78, 0.2)
+		"Überbestand":
+			return GOOD_COLOR
+		_:
+			return Color(1.0, 1.0, 1.0, 0.0)
+
+
+# ─── NPC Trading + Inter-system travel ────────────────────────────────────────
+
+func run_npc_trades() -> void:
+	for npc in npcs:
+		var state: String = str(npc["state"])
+
+		# Inter-system travel timer
+		if state == "traveling_intersystem":
+			var timer: float = float(npc["intersystem_travel_timer"])
+			timer -= NPC_TICK
+			if timer <= 0.0:
+				npc["state"] = "idle"
+				npc["intersystem_travel_timer"] = 0.0
+				npc["system_id"] = str(npc["dest_system_id"])
+				npc["anchor_station_id"] = get_random_station_in_system(str(npc["system_id"]))
+				npc["dest_system_id"] = ""
+			else:
+				npc["intersystem_travel_timer"] = timer
+			continue
+
+		# Skip NPCs not in current system (not visible; they still tick via intersystem logic)
+		var npc_sys: String = str(npc["system_id"])
+
+		if state == "idle":
+			# Small chance to travel to neighboring system
+			if rng.randf() < 0.02:
+				var dest_sys: String = get_random_neighbor(npc_sys)
+				if dest_sys != "":
+					npc["state"] = "traveling_intersystem"
+					npc["dest_system_id"] = dest_sys
+					npc["intersystem_travel_timer"] = INTERSYSTEM_NPC_TRAVEL_TIME
+					continue
+
+			# Look for a processing route first (T1 -> T2 chain)
+			var proc_route: Dictionary = find_npc_processing_route(npc_sys)
+			if not proc_route.is_empty():
+				var buy_id: String = str(proc_route["buy_station_id"])
+				var buy_station: Dictionary = get_station_by_id(buy_id)
+				if not buy_station.is_empty():
+					npc["state"] = "traveling_to_buy"
+					npc["dest_station_id"] = buy_id
+					npc["_proc_route"] = proc_route
+					set_npc_visual_target(npc, buy_station["position"])
+					continue
+
+			# Standard buy-sell trade
+			var route: Dictionary = find_npc_trade_route(npc_sys)
+			if route.is_empty():
+				continue
+			var buy_id: String = str(route["buy_station_id"])
+			var buy_station: Dictionary = get_station_by_id(buy_id)
+			if buy_station.is_empty():
+				continue
+			npc["state"] = "traveling_to_buy"
+			npc["dest_station_id"] = buy_id
+			npc.erase("_proc_route")
+			set_npc_visual_target(npc, buy_station["position"])
+
+		elif state == "buying":
+			if npc.has("_proc_route"):
+				_npc_execute_buy_for_process(npc)
+			else:
+				_npc_execute_buy(npc)
+
+		elif state == "traveling_to_process":
+			var proc_sid: String = str(npc["_proc_station_id"])
+			var proc_station: Dictionary = get_station_by_id(proc_sid)
+			if not proc_station.is_empty():
+				npc["state"] = "processing"
+			else:
+				npc["state"] = "idle"
+
+		elif state == "processing":
+			_npc_execute_process(npc)
+
+		elif state == "selling":
+			_npc_execute_sell(npc)
+
+
+func _npc_execute_buy(npc: Dictionary) -> void:
+	var route: Dictionary = find_npc_trade_route(str(npc["system_id"]))
+	if route.is_empty():
+		npc["state"] = "idle"
 		return
-	hovered_control_id = next_control
-	if play_sound and not hovered_control_id.is_empty():
-		play_ui_hover()
+	var buy_station: Dictionary = get_station_by_id(str(route["buy_station_id"]))
+	var sell_station: Dictionary = get_station_by_id(str(route["sell_station_id"]))
+	var rid: String = str(route["resource_id"])
+	if buy_station.is_empty() or sell_station.is_empty():
+		npc["state"] = "idle"
+		return
+	var buy_price: float = compute_buy_price(buy_station, rid)
+	var npc_creds: float = float(npc["credits"])
+	var npc_inv: Dictionary = npc["inventory"]
+	var npc_stacks: Dictionary = npc_inv["stacks"]
+	var npc_cap: int = int(npc_inv["capacity"])
+	var have: int = npc_stacks.values().reduce(func(a, b): return a + b, 0)
+	var avail: int = npc_cap - have
+	var affords: int = int(npc_creds / maxf(buy_price, 0.01))
+	var station_stock: int = buy_station["inventory"]["stacks"].get(rid, 0)
+	var trade_ratio: float = rng.randf_range(NPC_MIN_TRADE_RATIO, NPC_MAX_TRADE_RATIO)
+	var qty: int = maxi(1, mini(int(float(station_stock) * trade_ratio), mini(avail, affords)))
+	if qty <= 0 or station_stock <= 0:
+		npc["state"] = "idle"
+		return
+	var total_cost: float = float(qty) * buy_price
+	buy_station["inventory"]["stacks"][rid] = station_stock - qty
+	npc_stacks[rid] = npc_stacks.get(rid, 0) + qty
+	npc["credits"] = npc_creds - total_cost
+	npc["dest_station_id"] = str(route["sell_station_id"])
+	npc["state"] = "traveling_to_sell"
+	set_npc_visual_target(npc, sell_station["position"])
 
 
-func trigger_control_feedback(control_id: String) -> void:
-	feedback_control_id = control_id
-	feedback_timer = INTERACT_FEEDBACK_TIME
+func _npc_execute_buy_for_process(npc: Dictionary) -> void:
+	var proc_route: Dictionary = npc["_proc_route"]
+	var buy_id: String = str(proc_route["buy_station_id"])
+	var proc_sid: String = str(proc_route["proc_station_id"])
+	var mod_id: String = str(proc_route["module_id"])
+	var rid: String = str(PROCESSING_MODULES[mod_id]["input"])
+	var buy_station: Dictionary = get_station_by_id(buy_id)
+	var proc_station: Dictionary = get_station_by_id(proc_sid)
+	if buy_station.is_empty() or proc_station.is_empty():
+		npc["state"] = "idle"
+		npc.erase("_proc_route")
+		return
+	var buy_price: float = compute_buy_price(buy_station, rid)
+	var npc_creds: float = float(npc["credits"])
+	var npc_inv: Dictionary = npc["inventory"]
+	var npc_stacks: Dictionary = npc_inv["stacks"]
+	var npc_cap: int = int(npc_inv["capacity"])
+	var have: int = npc_stacks.values().reduce(func(a, b): return a + b, 0)
+	var avail: int = npc_cap - have
+	var affords: int = int(npc_creds / maxf(buy_price, 0.01))
+	var ratio: int = int(PROCESSING_MODULES[mod_id]["ratio"])
+	var batches: int = maxi(1, mini(avail / ratio, affords / ratio))
+	var qty: int = batches * ratio
+	var station_stock: int = buy_station["inventory"]["stacks"].get(rid, 0)
+	if qty <= 0 or station_stock < ratio:
+		npc["state"] = "idle"
+		npc.erase("_proc_route")
+		return
+	qty = mini(qty, station_stock)
+	batches = qty / ratio
+	if batches <= 0:
+		npc["state"] = "idle"
+		npc.erase("_proc_route")
+		return
+	var total_cost: float = float(qty) * buy_price
+	buy_station["inventory"]["stacks"][rid] = station_stock - qty
+	npc_stacks[rid] = npc_stacks.get(rid, 0) + qty
+	npc["credits"] = npc_creds - total_cost
+	npc["_proc_station_id"] = proc_sid
+	npc["state"] = "traveling_to_process"
+	set_npc_visual_target(npc, proc_station["position"])
 
 
-func is_control_hovered(control_id: String) -> bool:
-	return hovered_control_id == control_id
-
-
-func is_control_active(control_id: String) -> bool:
-	return feedback_timer > 0.0 and feedback_control_id == control_id
-
-
-func get_control_color(base_color: Color, control_id: String) -> Color:
-	if is_control_active(control_id):
-		return UI_BUTTON_PRESS_BG if base_color == UI_BUTTON_BG else base_color.lightened(0.2)
-	if is_control_hovered(control_id):
-		return UI_BUTTON_HOVER_BG if base_color == UI_BUTTON_BG else base_color.lightened(0.1)
-	return base_color
-
-# ─── Inventory ────────────────────────────────────────────────────────────────
-
-func get_inventory_amount(inventory: Dictionary, resource_id: String) -> int:
-	return inventory["stacks"].get(resource_id, 0)
-
-
-func set_inventory_amount(inventory: Dictionary, resource_id: String, amount: int) -> void:
-	if amount <= 0:
-		inventory["stacks"].erase(resource_id)
+func _npc_execute_process(npc: Dictionary) -> void:
+	var proc_route: Dictionary = npc["_proc_route"]
+	var mod_id: String = str(proc_route["module_id"])
+	var sell_id: String = str(proc_route["sell_station_id"])
+	var proc_sid: String = str(npc["_proc_station_id"])
+	var proc_station: Dictionary = get_station_by_id(proc_sid)
+	var pmod: Dictionary = PROCESSING_MODULES[mod_id]
+	var input_rid: String = str(pmod["input"])
+	var output_rid: String = str(pmod["output"])
+	var ratio: int = int(pmod["ratio"])
+	var fee: int = int(pmod["fee"])
+	var npc_stacks: Dictionary = npc["inventory"]["stacks"]
+	var have: int = npc_stacks.get(input_rid, 0)
+	var batches: int = have / ratio
+	if batches <= 0:
+		npc["state"] = "idle"
+		npc.erase("_proc_route")
+		npc.erase("_proc_station_id")
+		return
+	var total_fee: float = float(batches) * float(fee)
+	npc_stacks[input_rid] = have - batches * ratio
+	npc_stacks[output_rid] = npc_stacks.get(output_rid, 0) + batches
+	npc["credits"] = float(npc["credits"]) - total_fee
+	if not proc_station.is_empty():
+		proc_station["processing_income"] = int(proc_station["processing_income"]) + int(total_fee)
+	npc.erase("_proc_route")
+	npc.erase("_proc_station_id")
+	npc["dest_station_id"] = sell_id
+	var sell_station: Dictionary = get_station_by_id(sell_id)
+	if not sell_station.is_empty():
+		npc["state"] = "traveling_to_sell"
+		set_npc_visual_target(npc, sell_station["position"])
 	else:
-		inventory["stacks"][resource_id] = amount
+		npc["state"] = "idle"
 
 
-func add_to_inventory(inventory: Dictionary, resource_id: String, requested: int) -> int:
-	if requested <= 0:
-		return 0
-	var vol: int = RESOURCES[resource_id]["volume_per_unit"]
-	var max_add := get_available_capacity(inventory) / vol
-	var add := mini(requested, max_add)
-	if add <= 0:
-		return 0
-	set_inventory_amount(inventory, resource_id, get_inventory_amount(inventory, resource_id) + add)
-	return add
-
-
-func remove_from_inventory(inventory: Dictionary, resource_id: String, requested: int) -> int:
-	if requested <= 0:
-		return 0
-	var remove := mini(requested, get_inventory_amount(inventory, resource_id))
-	set_inventory_amount(inventory, resource_id, get_inventory_amount(inventory, resource_id) - remove)
-	return remove
-
-
-func get_used_capacity(inventory: Dictionary) -> int:
-	var used := 0
-	for res_id in inventory["stacks"]:
-		used += inventory["stacks"][res_id] * RESOURCES[res_id]["volume_per_unit"]
-	return used
-
-
-func get_available_capacity(inventory: Dictionary) -> int:
-	return maxi(0, inventory["capacity"] - get_used_capacity(inventory))
-
-
-func trim_inventory_to_capacity(inventory: Dictionary) -> void:
-	var over: int = get_used_capacity(inventory) - int(inventory["capacity"])
-	if over <= 0:
+func _npc_execute_sell(npc: Dictionary) -> void:
+	var npc_stacks: Dictionary = npc["inventory"]["stacks"]
+	var sell_station: Dictionary = get_station_by_id(str(npc["dest_station_id"]))
+	if sell_station.is_empty():
+		npc["state"] = "idle"
 		return
-	for resource_id in RESOURCE_IDS:
-		if over <= 0:
-			break
-		var amount := get_inventory_amount(inventory, resource_id)
-		if amount <= 0:
+	var station_stacks: Dictionary = sell_station["inventory"]["stacks"]
+	var station_cap: int = int(sell_station["inventory"]["capacity"])
+	var sold_any := false
+	for rid in npc_stacks.keys():
+		var qty: int = int(npc_stacks[rid])
+		if qty <= 0:
 			continue
-		var vol: int = RESOURCES[resource_id]["volume_per_unit"]
-		var removable := mini(amount, ceili(float(over) / float(vol)))
-		set_inventory_amount(inventory, resource_id, amount - removable)
-		over -= removable * vol
-
-
-func get_inventory_value(inventory: Dictionary, station: Dictionary, buy_prices: bool) -> int:
-	var total := 0
-	for resource_id in RESOURCE_IDS:
-		var amount := get_inventory_amount(inventory, resource_id)
-		if amount <= 0:
+		var have_station: int = station_stacks.get(rid, 0)
+		if have_station >= station_cap:
 			continue
-		var price := get_station_buy_price(station, resource_id) if buy_prices else get_station_sell_price(station, resource_id)
-		total += amount * price
-	return total
-
-
-func calc_max_buy(resource_id: String, station: Dictionary) -> int:
-	var price: int = maxi(1, get_station_buy_price(station, resource_id))
-	var affordable: int = int(player_agent["credits"]) / price
-	var stock: int = get_inventory_amount(station["inventory"], resource_id)
-	var vol: int = int(RESOURCES[resource_id]["volume_per_unit"])
-	var room: int = get_available_capacity(player_agent["inventory"]) / vol
-	return maxi(0, mini(stock, mini(affordable, room)))
-
-
-func calc_expected_profit(resource_id: String, amount: int, sell_price: int) -> int:
-	var avg: float = avg_buy_price.get(resource_id, float(sell_price))
-	return roundi((sell_price - avg) * amount)
-
-
-func update_average_buy(resource_id: String, amount: int, unit_price: int) -> void:
-	var new_amount: int = get_inventory_amount(player_agent["inventory"], resource_id)
-	var old_amount: int = new_amount - amount
-	if new_amount <= 0:
-		avg_buy_price.erase(resource_id)
+		var sell_price: float = compute_sell_price(sell_station, rid)
+		var room: int = station_cap - have_station
+		var sell_qty: int = mini(qty, room)
+		station_stacks[rid] = have_station + sell_qty
+		npc_stacks[rid] = qty - sell_qty
+		npc["credits"] = float(npc["credits"]) + float(sell_qty) * sell_price
+		sold_any = true
+	npc["state"] = "idle"
+	npc["dest_station_id"] = ""
+	if not sold_any:
 		return
-	var old_avg: float = avg_buy_price.get(resource_id, float(unit_price))
-	avg_buy_price[resource_id] = (old_avg * old_amount + amount * unit_price) / float(new_amount)
-
-# ─── Trade Log / UI ───────────────────────────────────────────────────────────
-
-func add_trade_log(message: String) -> void:
-	trade_log.append(message)
-	while trade_log.size() > MAX_TRADE_LOG:
-		trade_log.remove_at(0)
+	npc["anchor_station_id"] = str(sell_station["id"])
 
 
-func recent_trades() -> String:
-	if trade_log.is_empty():
-		return "Keine"
-	var start := maxi(0, trade_log.size() - 2)
-	var entries := []
-	for i in range(trade_log.size() - 1, start - 1, -1):
-		entries.append(trade_log[i])
-	return " | ".join(entries)
+func find_npc_trade_route(sys_id: String) -> Dictionary:
+	var best: Dictionary = {}
+	var best_profit := -INF
+	var local_stations: Array = []
+	for s in stations:
+		if str(s["system_id"]) == sys_id:
+			local_stations.append(s)
+	for buy_s in local_stations:
+		for sell_s in local_stations:
+			if str(buy_s["id"]) == str(sell_s["id"]):
+				continue
+			for rid in RESOURCE_IDS:
+				var buy_stock: int = buy_s["inventory"]["stacks"].get(rid, 0)
+				if buy_stock < 2:
+					continue
+				var buy_p: float = compute_buy_price(buy_s, rid)
+				var sell_p: float = compute_sell_price(sell_s, rid)
+				var profit: float = sell_p - buy_p
+				if profit > best_profit:
+					best_profit = profit
+					best = {"buy_station_id": str(buy_s["id"]), "sell_station_id": str(sell_s["id"]), "resource_id": rid}
+	return best
 
 
-func success_trade(text: String) -> void:
-	status = text
-	toast_text = text
-	toast_timer = 2.0
+func find_npc_processing_route(sys_id: String) -> Dictionary:
+	var best: Dictionary = {}
+	var best_profit := -INF
+	var local_stations: Array = []
+	for s in stations:
+		if str(s["system_id"]) == sys_id:
+			local_stations.append(s)
+	for buy_s in local_stations:
+		for proc_s in local_stations:
+			var proc_modules: Array = proc_s["modules"]
+			for mod_id in proc_modules:
+				var pmod: Dictionary = PROCESSING_MODULES[mod_id]
+				var input_rid: String = str(pmod["input"])
+				var output_rid: String = str(pmod["output"])
+				var ratio: int = int(pmod["ratio"])
+				var fee: float = float(pmod["fee"])
+				var buy_stock: int = buy_s["inventory"]["stacks"].get(input_rid, 0)
+				if buy_stock < ratio:
+					continue
+				var buy_p: float = compute_buy_price(buy_s, input_rid) * float(ratio)
+				var out_base: float = float(RESOURCES[output_rid]["base_price"])
+				var profit: float = out_base - buy_p - fee
+				if profit > best_profit:
+					for sell_s in local_stations:
+						if str(sell_s["id"]) == str(proc_s["id"]):
+							continue
+						var sell_p: float = compute_sell_price(sell_s, output_rid)
+						var route_profit: float = sell_p - buy_p - fee
+						if route_profit > best_profit:
+							best_profit = route_profit
+							best = {
+								"buy_station_id": str(buy_s["id"]),
+								"proc_station_id": str(proc_s["id"]),
+								"sell_station_id": str(sell_s["id"]),
+								"module_id": mod_id
+							}
+	return best
+
+
+func get_random_neighbor(sys_id: String) -> String:
+	if not SYSTEMS.has(sys_id):
+		return ""
+	var nbrs: Dictionary = SYSTEMS[sys_id]["neighbors"]
+	var valid_dirs: Array = []
+	for dir in nbrs.keys():
+		if str(nbrs[dir]) != "":
+			valid_dirs.append(dir)
+	if valid_dirs.is_empty():
+		return ""
+	var chosen_dir: String = str(valid_dirs[rng.randi() % valid_dirs.size()])
+	return str(nbrs[chosen_dir])
+
+
+func get_random_station_in_system(sys_id: String) -> String:
+	var ids: Array = []
+	for s in stations:
+		if str(s["system_id"]) == sys_id:
+			ids.append(str(s["id"]))
+	if ids.is_empty():
+		return ""
+	return str(ids[rng.randi() % ids.size()])
+
+
+# NPC visual movement
+func set_npc_visual_target(npc: Dictionary, target: Vector2) -> void:
+	npc["target_position"] = target
+	npc["travel_progress"] = 0.0
+	var dur: float = rng.randf_range(NPC_VISUAL_MIN_TRAVEL, NPC_VISUAL_MAX_TRAVEL)
+	npc["travel_duration"] = dur
+
+
+func update_npc_visuals(delta: float) -> void:
+	for npc in npcs:
+		var state: String = str(npc["state"])
+		if state == "traveling_intersystem":
+			continue
+		if state in ["traveling_to_buy", "traveling_to_sell", "traveling_to_process"]:
+			var prog: float = float(npc["travel_progress"])
+			var dur: float = float(npc["travel_duration"])
+			prog = minf(prog + delta / maxf(dur, 0.01), 1.0)
+			npc["travel_progress"] = prog
+			var start_pos: Vector2 = npc["visual_position"]
+			var target_pos: Vector2 = npc["target_position"]
+			npc["visual_position"] = start_pos.lerp(target_pos, prog)
+			if prog >= 1.0:
+				npc["visual_position"] = target_pos
+				match state:
+					"traveling_to_buy":
+						npc["state"] = "buying"
+					"traveling_to_sell":
+						npc["state"] = "selling"
+					"traveling_to_process":
+						npc["state"] = "processing"
+		else:
+			var anchor_id: String = str(npc["anchor_station_id"])
+			var anchor_st: Dictionary = get_station_by_id(anchor_id)
+			if anchor_st.is_empty():
+				continue
+			var t: float = visual_time * NPC_IDLE_SPEED + float(npc["id"].hash()) * 0.37
+			var idle_r: float = NPC_IDLE_RADIUS + sin(t * NPC_IDLE_SWAY_RATIO) * 2.0
+			var angle: float = t
+			npc["visual_position"] = anchor_st["position"] + Vector2(cos(angle) * idle_r, sin(angle) * idle_r)
+
+
+# ─── Player Trade + Processing ────────────────────────────────────────────────
+
+func attempt_buy(resource_id: String, qty: int) -> void:
+	if not is_docked or docking_station.is_empty():
+		return
+	var station: Dictionary = docking_station
+	var stacks: Dictionary = station["inventory"]["stacks"]
+	var stock: int = stacks.get(resource_id, 0)
+	if stock <= 0:
+		show_toast("Kein Bestand in dieser Station.", 2.0)
+		last_trade_failed = true
+		return
+	var actual_qty: int = mini(qty, stock)
+	var inv: Dictionary = player_agent["inventory"]
+	var pstacks: Dictionary = inv["stacks"]
+	var used: int = pstacks.values().reduce(func(a, b): return a + b, 0)
+	var room: int = int(inv["capacity"]) - used
+	actual_qty = mini(actual_qty, room)
+	if actual_qty <= 0:
+		show_toast("Frachtraum voll!", 2.0)
+		last_trade_failed = true
+		return
+	var price: float = compute_buy_price(station, resource_id) * float(actual_qty)
+	if float(player_agent["credits"]) < price:
+		show_toast("Nicht genug Credits!", 2.0)
+		last_trade_failed = true
+		return
+	stacks[resource_id] = stock - actual_qty
+	pstacks[resource_id] = pstacks.get(resource_id, 0) + actual_qty
+	player_agent["credits"] = float(player_agent["credits"]) - price
+	avg_buy_price[resource_id] = price / float(actual_qty)
+	var log_entry: String = "Gekauft: " + str(actual_qty) + "× " + str(RESOURCES[resource_id]["display_name"]) + " für " + str(int(price)) + " Cr"
+	add_trade_log(log_entry)
+	show_toast(log_entry, 1.6)
 	last_trade_failed = false
-	if trade_success_player != null:
-		trade_success_player.play()
 
 
-func fail_trade(text: String) -> void:
-	status = text
-	toast_text = text
-	toast_timer = 2.0
-	last_trade_failed = true
-	if trade_fail_player != null:
-		trade_fail_player.play()
+func attempt_sell(resource_id: String, qty: int) -> void:
+	if not is_docked or docking_station.is_empty():
+		return
+	var inv: Dictionary = player_agent["inventory"]
+	var pstacks: Dictionary = inv["stacks"]
+	var have: int = pstacks.get(resource_id, 0)
+	if have <= 0:
+		show_toast("Nicht im Inventar.", 2.0)
+		last_trade_failed = true
+		return
+	var station: Dictionary = docking_station
+	var sname: String = str(station["display_name"])
+	var actual_qty: int = mini(qty, have)
+	var station_stacks: Dictionary = station["inventory"]["stacks"]
+	var station_cap: int = int(station["inventory"]["capacity"])
+	var station_have: int = station_stacks.get(resource_id, 0)
+	if station_have >= station_cap:
+		show_toast("Station voll! Kann nicht kaufen.", 2.0)
+		last_trade_failed = true
+		return
+	var room: int = station_cap - station_have
+	actual_qty = mini(actual_qty, room)
+	if actual_qty <= 0:
+		show_toast("Station kann nicht mehr aufnehmen.", 2.0)
+		last_trade_failed = true
+		return
+	var price: float = compute_sell_price(station, resource_id) * float(actual_qty)
+	pstacks[resource_id] = have - actual_qty
+	station_stacks[resource_id] = station_have + actual_qty
+	player_agent["credits"] = float(player_agent["credits"]) + price
+	var log_entry: String = "Verkauft: " + str(actual_qty) + "× " + str(RESOURCES[resource_id]["display_name"]) + " für " + str(int(price)) + " Cr"
+	add_trade_log(log_entry)
+	show_toast(log_entry, 1.6)
+	last_trade_failed = false
 
-# ─── HUD ──────────────────────────────────────────────────────────────────────
+
+func attempt_sell_all() -> void:
+	if not is_docked or docking_station.is_empty():
+		return
+	var pstacks: Dictionary = player_agent["inventory"]["stacks"]
+	var any_sold := false
+	for rid in RESOURCE_IDS:
+		var have: int = pstacks.get(rid, 0)
+		if have > 0:
+			attempt_sell(rid, have)
+			any_sold = true
+	if not any_sold:
+		show_toast("Kein Inventar zu verkaufen.", 2.0)
+
+
+func attempt_process(mod_id: String) -> void:
+	if not is_docked or docking_station.is_empty():
+		return
+	var station: Dictionary = docking_station
+	var station_modules: Array = station["modules"]
+	if not (mod_id in station_modules):
+		show_toast("Modul nicht verfügbar.", 2.0)
+		return
+	var pmod: Dictionary = PROCESSING_MODULES[mod_id]
+	var input_rid: String = str(pmod["input"])
+	var output_rid: String = str(pmod["output"])
+	var ratio: int = int(pmod["ratio"])
+	var fee: float = float(pmod["fee"])
+	var pstacks: Dictionary = player_agent["inventory"]["stacks"]
+	var have: int = pstacks.get(input_rid, 0)
+	var batches: int = have / ratio
+	if batches <= 0:
+		show_toast("Nicht genug " + str(RESOURCES[input_rid]["display_name"]) + " für Verarbeitung.", 2.2)
+		return
+	var total_fee: float = float(batches) * fee
+	var is_own: bool = bool(station["is_player_owned"])
+	if not is_own and float(player_agent["credits"]) < total_fee:
+		show_toast("Nicht genug Credits für Gebühr (" + str(int(total_fee)) + " Cr).", 2.2)
+		return
+	var inv: Dictionary = player_agent["inventory"]
+	var pst2: Dictionary = inv["stacks"]
+	var used: int = pst2.values().reduce(func(a, b): return a + b, 0)
+	var room: int = int(inv["capacity"]) - used + have - (batches * ratio)
+	if room < batches:
+		show_toast("Frachtraum zu voll für Ausgabe.", 2.2)
+		return
+	pst2[input_rid] = have - batches * ratio
+	pst2[output_rid] = pst2.get(output_rid, 0) + batches
+	player_agent["credits"] = float(player_agent["credits"]) - total_fee
+	if not is_own:
+		station["processing_income"] = int(station["processing_income"]) + int(total_fee)
+	var log_msg: String = "Verarbeitet: " + str(batches * ratio) + "× " + str(RESOURCES[input_rid]["display_name"]) + " → " + str(batches) + "× " + str(RESOURCES[output_rid]["display_name"]) + " (Gebühr: " + str(int(total_fee)) + " Cr)"
+	add_trade_log(log_msg)
+	show_toast(log_msg, 2.5)
+
+
+# ─── Sorted inventory for trade panel ─────────────────────────────────────────
+
+func get_sorted_rows(station: Dictionary) -> Array:
+	var rows: Array = []
+	var pstacks: Dictionary = player_agent["inventory"]["stacks"]
+	var station_stacks: Dictionary = station["inventory"]["stacks"]
+	for rid in RESOURCE_IDS:
+		var res: Dictionary = RESOURCES[rid]
+		var display_name: String = str(res["display_name"])
+		if search.length() > 0 and not display_name.to_lower().contains(search):
+			continue
+		var player_amt: int = pstacks.get(rid, 0)
+		var station_amt: int = station_stacks.get(rid, 0)
+		var buy_p: float = compute_buy_price(station, rid)
+		var sell_p: float = compute_sell_price(station, rid)
+		var val: float = float(player_amt) * sell_p
+		var tier: int = int(res["tier"])
+		rows.append({
+			"id": rid, "name": display_name, "tier": tier,
+			"amount": player_amt, "station_amount": station_amt,
+			"buy_price": buy_p, "sell_price": sell_p,
+			"value": val, "unit_price": sell_p
+		})
+	rows.sort_custom(func(a, b):
+		var av = a[sort_key]
+		var bv = b[sort_key]
+		if typeof(av) == TYPE_STRING:
+			return (av < bv) if sort_ascending else (av > bv)
+		return (float(av) < float(bv)) if sort_ascending else (float(av) > float(bv))
+	)
+	return rows
+
+
+# ─── HUD + Toast ──────────────────────────────────────────────────────────────
 
 func update_hud() -> void:
-	var ref_station = docking_station if docking_station != null else (stations[0] if not stations.is_empty() else null)
-	var ship_value: int = get_inventory_value(player_agent["inventory"], ref_station, false) if ref_station != null else 0
-	hud_label.text = "Credits: %d   Cargo: %d/%d   Stationen: %d   Schiffswert: %d   Ziel: 2000" % [
-		int(player_agent["credits"]), get_used_capacity(player_agent["inventory"]), int(player_agent["inventory"]["capacity"]), stations.size(), ship_value
-	]
-
-	var dock_text: String
-	if is_docked and docking_station != null:
-		dock_text = "Docked at %s" % docking_station["name"]
-	elif docking_station != null and Input.is_key_pressed(KEY_C) and docking_progress > 0.0:
-		dock_text = "Docking %d%%" % int(round(100.0 * docking_progress / DOCK_HOLD_TIME))
-	else:
-		dock_text = "Undocked"
-
-	status_label.modulate = BAD_COLOR if last_trade_failed else Color.WHITE
-	status_label.text = "%s | %s" % [dock_text, status]
-
-# ─── Milestone ────────────────────────────────────────────────────────────────
-
-func build_player_station() -> void:
-	var station := create_station("player_hq", "Player Nexus", player_position + Vector2(90.0, -40.0), "trade_station", 5.0, 0.0)
-	for resource_id in RESOURCE_IDS:
-		add_to_inventory(station["inventory"], resource_id, 8)
-	stations.append(station)
-
-# ─── Sorting / Search ─────────────────────────────────────────────────────────
-
-func get_rows(inventory: Dictionary, station: Dictionary, buy_prices: bool) -> Array:
-	var rows := []
-	for resource_id in RESOURCE_IDS:
-		var amount := get_inventory_amount(inventory, resource_id)
-		if amount <= 0:
-			continue
-		var res: Dictionary = RESOURCES[resource_id]
-		if not search.is_empty() and not res["display_name"].to_lower().contains(search.to_lower()):
-			continue
-		var unit := get_station_buy_price(station, resource_id) if buy_prices else get_station_sell_price(station, resource_id)
-		rows.append({
-			"resource_id": resource_id,
-			"amount": amount,
-			"unit_price": unit,
-			"total_value": amount * unit,
-			"total_volume": amount * res["volume_per_unit"]
-		})
-	rows.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
-		var cmp := _compare_rows(a, b)
-		return cmp < 0 if sort_ascending else cmp > 0
-	)
-	return rows
+	var inv: Dictionary = player_agent["inventory"]
+	var pstacks: Dictionary = inv["stacks"]
+	var used: int = pstacks.values().reduce(func(a, b): return a + b, 0)
+	var cap: int = int(inv["capacity"])
+	var creds: int = int(player_agent["credits"])
+	var sys_name: String = str(SYSTEMS[current_system_id]["display_name"])
+	hud_label.text = "Credits: %d Cr   Fracht: %d/%d   System: %s" % [creds, used, cap, sys_name]
+	status_label.text = status
 
 
-# Like get_rows but always includes every resource, even those with zero stock/cargo.
-# Used by both panels so the player can always select any resource.
-func get_all_resource_rows(inventory: Dictionary, station: Dictionary, buy_prices: bool) -> Array:
-	var rows: Array = []
-	for resource_id in RESOURCE_IDS:
-		var amount: int = get_inventory_amount(inventory, resource_id)
-		var res: Dictionary = RESOURCES[resource_id]
-		if not search.is_empty() and not str(res["display_name"]).to_lower().contains(search.to_lower()):
-			continue
-		var unit: int = get_station_buy_price(station, resource_id) if buy_prices else get_station_sell_price(station, resource_id)
-		var vol: int = int(res["volume_per_unit"])
-		rows.append({
-			"resource_id": resource_id,
-			"amount": amount,
-			"unit_price": unit,
-			"total_value": amount * unit,
-			"total_volume": amount * vol
-		})
-	rows.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
-		var cmp := _compare_rows(a, b)
-		return cmp < 0 if sort_ascending else cmp > 0
-	)
-	return rows
+func add_trade_log(entry: String) -> void:
+	trade_log.append(entry)
+	if trade_log.size() > MAX_TRADE_LOG:
+		trade_log.pop_front()
 
 
-func _compare_rows(a: Dictionary, b: Dictionary) -> int:
-	match sort_key:
-		"name":
-			var na: String = RESOURCES[a["resource_id"]]["display_name"]
-			var nb: String = RESOURCES[b["resource_id"]]["display_name"]
-			if na < nb: return -1
-			if na > nb: return 1
-			return 0
-		"tier":
-			return RESOURCES[a["resource_id"]]["tier"] - RESOURCES[b["resource_id"]]["tier"]
-		"amount":
-			return a["amount"] - b["amount"]
-		"unit_price":
-			return a["unit_price"] - b["unit_price"]
-		_:
-			return a["total_value"] - b["total_value"]
+func show_toast(text: String, duration: float) -> void:
+	toast_text = text
+	toast_timer = duration
 
 
-func cycle_sort() -> void:
-	var idx := SORT_KEYS.find(sort_key)
-	sort_key = SORT_KEYS[(idx + 1) % SORT_KEYS.size()]
+func draw_toast() -> void:
+	var vp: Vector2 = get_viewport_rect().size
+	var font: Font = ThemeDB.fallback_font
+	var fsize := 16
+	var w: float = font.get_string_size(toast_text, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize).x + 28.0
+	var h := 32.0
+	var tx: float = (vp.x - w) * 0.5
+	var ty: float = vp.y * 0.82
+	var bg_rect := Rect2(tx - 4.0, ty - 4.0, w + 8.0, h + 8.0)
+	draw_rect(bg_rect, TOAST_BG_COLOR)
+	draw_rect(bg_rect, TOAST_BORDER_COLOR, false, 1.3)
+	draw_string(font, Vector2(tx, ty + float(fsize)), toast_text, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, Color.WHITE)
 
 
-func sort_label(key: String) -> String:
-	match key:
-		"name": return "Name"
-		"tier": return "Tier"
-		"amount": return "Menge"
-		"value": return "Gesamtwert"
-		"unit_price": return "Preis/Einheit"
-		_: return key
+func reset_run() -> void:
+	rng.seed = DEFAULT_RNG_SEED
+	var file := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
+	if file:
+		file.store_string("{}")
+		file.close()
+	setup_defaults()
+	all_stars.clear()
+	generate_all_starfields()
+	status = DEFAULT_STATUS
+	show_toast("Run zurückgesetzt!", 2.5)
 
 
 func ensure_resource_selected() -> void:
 	if not RESOURCES.has(selected_resource_id):
-		selected_resource_id = DEFAULT_RESOURCE_ID
+		selected_resource_id = RESOURCE_IDS[0]
 
-# ─── Starfield ────────────────────────────────────────────────────────────────
 
-func generate_starfield() -> void:
-	stars.clear()
-	var viewport_size := get_viewport_rect().size
-	for _i in range(STARFIELD_COUNT):
-		stars.append({
-			"pos": Vector2(rng.randf_range(0.0, viewport_size.x), rng.randf_range(0.0, viewport_size.y)),
-			"size": rng.randf_range(0.7, 2.2),
-			"phase": rng.randf_range(0.0, TAU),
-			"speed": rng.randf_range(0.8, 2.2),
-			"color": Color(
-				0.78 + rng.randf_range(0.0, 0.2),
-				0.78 + rng.randf_range(0.0, 0.2),
-				0.9 + rng.randf_range(0.0, 0.1),
-				0.45 + rng.randf_range(0.0, 0.5)
-			)
-		})
+func cycle_sort() -> void:
+	var idx: int = SORT_KEYS.find(sort_key)
+	idx = (idx + 1) % SORT_KEYS.size()
+	sort_key = str(SORT_KEYS[idx])
+
+
+# ─── Drawing ──────────────────────────────────────────────────────────────────
+
+func draw_background() -> void:
+	var vp: Rect2 = get_viewport_rect()
+	var sys: Dictionary = SYSTEMS[current_system_id]
+	var bg: Color = sys["bg_color"]
+	draw_rect(vp, bg)
+
+	# Draw nebula clouds
+	var neb1_ratio: Vector2 = sys["nebula1_pos_ratio"]
+	var neb1_pos: Vector2 = Vector2(vp.size.x * float(neb1_ratio.x), vp.size.y * float(neb1_ratio.y))
+	var neb1_r: float = float(sys["nebula1_radius"])
+	var neb1_col: Color = sys["nebula1_color"]
+	draw_circle(neb1_pos, neb1_r, neb1_col)
+
+	var neb2_ratio: Vector2 = sys["nebula2_pos_ratio"]
+	var neb2_pos: Vector2 = Vector2(vp.size.x * float(neb2_ratio.x), vp.size.y * float(neb2_ratio.y))
+	var neb2_r: float = float(sys["nebula2_radius"])
+	var neb2_col: Color = sys["nebula2_color"]
+	draw_circle(neb2_pos, neb2_r, neb2_col)
+
+	# Draw starfield
+	if all_stars.has(current_system_id):
+		var star_list: Array = all_stars[current_system_id]
+		for star in star_list:
+			var twinkle: float = sin(visual_time * float(star["twinkle_speed"]) + float(star["twinkle_offset"])) * 0.18
+			var col: Color = star["color"]
+			col.a = clampf(col.a + twinkle, 0.1, 1.0)
+			draw_circle(star["pos"], float(star["size"]), col)
+
+	# Draw transit zone arrows
+	draw_transit_arrows(vp)
+
+
+func draw_transit_arrows(vp: Rect2) -> void:
+	var sys: Dictionary = SYSTEMS[current_system_id]
+	var nbrs: Dictionary = sys["neighbors"]
+	var accent: Color = sys["accent_color"]
+	var font: Font = ThemeDB.fallback_font
+	var fsize := 11
+
+	# North arrow
+	if str(nbrs["north"]) != "":
+		var dest_name: String = str(SYSTEMS[str(nbrs["north"])]["display_name"])
+		var arrow_pts: PackedVector2Array = PackedVector2Array([
+			Vector2(vp.size.x * 0.5 - 7.0, 16.0),
+			Vector2(vp.size.x * 0.5 + 7.0, 16.0),
+			Vector2(vp.size.x * 0.5, 5.0)
+		])
+		draw_colored_polygon(arrow_pts, accent)
+		draw_string(font, Vector2(vp.size.x * 0.5 - 40.0, 30.0), dest_name, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, accent)
+
+	# East arrow
+	if str(nbrs["east"]) != "":
+		var dest_name: String = str(SYSTEMS[str(nbrs["east"])]["display_name"])
+		var arrow_pts: PackedVector2Array = PackedVector2Array([
+			Vector2(vp.size.x - 16.0, vp.size.y * 0.5 - 7.0),
+			Vector2(vp.size.x - 16.0, vp.size.y * 0.5 + 7.0),
+			Vector2(vp.size.x - 5.0, vp.size.y * 0.5)
+		])
+		draw_colored_polygon(arrow_pts, accent)
+		draw_string(font, Vector2(vp.size.x - 110.0, vp.size.y * 0.5 - 10.0), dest_name, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, accent)
+
+	# South arrow
+	if str(nbrs["south"]) != "":
+		var dest_name: String = str(SYSTEMS[str(nbrs["south"])]["display_name"])
+		var arrow_pts: PackedVector2Array = PackedVector2Array([
+			Vector2(vp.size.x * 0.5 - 7.0, vp.size.y - 16.0),
+			Vector2(vp.size.x * 0.5 + 7.0, vp.size.y - 16.0),
+			Vector2(vp.size.x * 0.5, vp.size.y - 5.0)
+		])
+		draw_colored_polygon(arrow_pts, accent)
+		draw_string(font, Vector2(vp.size.x * 0.5 - 40.0, vp.size.y - 32.0), dest_name, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, accent)
+
+	# West arrow
+	if str(nbrs["west"]) != "":
+		var dest_name: String = str(SYSTEMS[str(nbrs["west"])]["display_name"])
+		var arrow_pts: PackedVector2Array = PackedVector2Array([
+			Vector2(16.0, vp.size.y * 0.5 - 7.0),
+			Vector2(16.0, vp.size.y * 0.5 + 7.0),
+			Vector2(5.0, vp.size.y * 0.5)
+		])
+		draw_colored_polygon(arrow_pts, accent)
+		draw_string(font, Vector2(22.0, vp.size.y * 0.5 + 6.0), dest_name, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, accent)
+
+
+func draw_station_node(station: Dictionary, idx: int) -> void:
+	var pos: Vector2 = station["position"]
+	var col: Color = STATION_COLOR
+	if bool(station["is_player_owned"]):
+		col = Color(0.45, 1.0, 0.55)
+	var near: bool = player_position.distance_to(pos) < DOCK_RANGE
+	if near:
+		draw_circle(pos, 28.0, Color(col.r, col.g, col.b, 0.12))
+		draw_circle(pos, 28.0, Color(col.r, col.g, col.b, 0.5), false, 1.5)
+
+	# Station body
+	var pts: PackedVector2Array = PackedVector2Array()
+	for i in range(6):
+		var a: float = float(i) / 6.0 * TAU - PI / 6.0
+		pts.append(pos + Vector2(cos(a) * 14.0, sin(a) * 14.0))
+	draw_colored_polygon(pts, Color(col.r * 0.4, col.g * 0.4, col.b * 0.4))
+	draw_polyline(pts + PackedVector2Array([pts[0]]), col, 1.6)
+
+	# Dock indicator
+	if near and not is_docked:
+		var prog: float = docking_progress / DOCK_HOLD_TIME
+		draw_arc(pos, 20.0, -PI * 0.5, -PI * 0.5 + prog * TAU, 24, Color(0.35, 1.0, 0.55, 0.82), 2.5)
+
+	var font: Font = ThemeDB.fallback_font
+	var fsize := 12
+	var sname: String = str(station["display_name"])
+	var stype_name: String = str(STATION_TYPES[str(station["type_id"])]["display_name"])
+	draw_string(font, pos + Vector2(-40.0, 26.0), sname, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, col)
+	draw_string(font, pos + Vector2(-40.0, 40.0), stype_name, HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(col.r, col.g, col.b, 0.72))
+
+	# Module badges
+	var station_modules: Array = station["modules"]
+	for mi in range(station_modules.size()):
+		var mid: String = str(station_modules[mi])
+		var pmod: Dictionary = PROCESSING_MODULES[mid]
+		var badge_text: String = str(pmod["display_name"])[0]
+		var badge_pos: Vector2 = pos + Vector2(-14.0 + float(mi) * 18.0, 52.0)
+		draw_circle(badge_pos, 7.0, PROCESS_BUTTON_COLOR)
+		draw_string(font, badge_pos + Vector2(-3.5, 5.0), badge_text, HORIZONTAL_ALIGNMENT_LEFT, -1, 9, Color.WHITE)
+
+	# Processing income indicator for player-owned station
+	if bool(station["is_player_owned"]):
+		var income: int = int(station["processing_income"])
+		if income > 0:
+			draw_string(font, pos + Vector2(-20.0, 66.0), "Geb: " + str(income) + " Cr", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, CREDIT_COLOR)
+
+
+func draw_npc_markers() -> void:
+	for npc in npcs:
+		if str(npc["system_id"]) != current_system_id:
+			continue
+		if str(npc["state"]) == "traveling_intersystem":
+			continue
+		var vpos: Vector2 = npc["visual_position"]
+		draw_circle(vpos, 3.2, NPC_MARKER_COLOR)
+
+
+func draw_ship() -> void:
+	var angle: float = player_rotation
+	var forward := Vector2(cos(angle), sin(angle))
+	var right := Vector2(-forward.y, forward.x)
+	var p0: Vector2 = player_position + forward * 10.0
+	var p1: Vector2 = player_position - forward * 7.0 + right * 5.5
+	var p2: Vector2 = player_position - forward * 7.0 - right * 5.5
+	var pts: PackedVector2Array = PackedVector2Array([p0, p1, p2])
+	draw_colored_polygon(pts, PLAYER_COLOR)
+
+	# Docking progress arc around player
+	if not is_docked and docking_progress > 0.0:
+		var prog: float = docking_progress / DOCK_HOLD_TIME
+		draw_arc(player_position, 16.0, -PI * 0.5, -PI * 0.5 + prog * TAU, 24, Color(0.35, 1.0, 0.55, 0.7), 2.0)
+
+
+func draw_own_station() -> void:
+	draw_ship()
+	for station in stations:
+		if bool(station["is_player_owned"]) and str(station["system_id"]) == current_system_id:
+			var pos: Vector2 = station["position"]
+			var col := Color(0.45, 1.0, 0.55)
+			for j in range(4):
+				var a: float = float(j) / 4.0 * TAU
+				var spoke_end: Vector2 = pos + Vector2(cos(a) * 22.0, sin(a) * 22.0)
+				draw_line(pos, spoke_end, Color(col.r, col.g, col.b, 0.55), 1.2)
+			draw_circle(pos, 10.0, Color(0.25, 0.6, 0.35))
+			draw_circle(pos, 10.0, col, false, 1.5)
+			var font: Font = ThemeDB.fallback_font
+			draw_string(font, pos + Vector2(-30.0, 22.0), "Deine Station", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, col)
+
+
+# ─── Trade interface ──────────────────────────────────────────────────────────
+
+func draw_trade_interface(station: Dictionary) -> void:
+	var vp: Vector2 = get_viewport_rect().size
+	var font: Font = ThemeDB.fallback_font
+
+	# Station info panel (top-left)
+	var info_rect := Rect2(10.0, 10.0, 230.0, 105.0)
+	draw_rect(info_rect, PANEL_COLOR)
+	draw_rect(info_rect, PANEL_BORDER, false, 1.2)
+	var sname: String = str(station["display_name"])
+	var stype_id: String = str(station["type_id"])
+	var stype_name: String = str(STATION_TYPES[stype_id]["display_name"])
+	var sys_name: String = str(SYSTEMS[current_system_id]["display_name"])
+	draw_string(font, Vector2(18.0, 28.0), sname, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color.WHITE)
+	draw_string(font, Vector2(18.0, 46.0), stype_name, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, STATION_COLOR)
+	draw_string(font, Vector2(18.0, 61.0), sys_name, HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.72, 0.72, 0.9))
+	var inv: Dictionary = station["inventory"]
+	var station_stacks: Dictionary = inv["stacks"]
+	var station_used: int = station_stacks.values().reduce(func(a, b): return a + b, 0)
+	var station_cap: int = int(inv["capacity"])
+	var income: int = int(station["processing_income"])
+	draw_string(font, Vector2(18.0, 77.0), "Lager: %d/%d" % [station_used, station_cap], HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.75, 0.75, 0.75))
+	if income > 0:
+		draw_string(font, Vector2(18.0, 93.0), "Verarbeitungseinnahmen: %d Cr" % income, HORIZONTAL_ALIGNMENT_LEFT, -1, 10, CREDIT_COLOR)
+
+	# Determine panel height based on module count
+	var station_modules: Array = station["modules"]
+	var extra_height: int = station_modules.size() * 44
+	draw_trade_panel(station, vp, font, extra_height)
+	draw_trade_log_panel(vp, font)
+
+
+func draw_trade_panel(station: Dictionary, vp: Vector2, font: Font, extra_height: int) -> void:
+	var rows: Array = get_sorted_rows(station)
+	var panel_w := 530.0
+	var base_h := 342.0
+	var panel_h: float = base_h + float(extra_height)
+	var px: float = (vp.x - panel_w) * 0.5
+	var py: float = (vp.y - panel_h) * 0.5
+	var panel_rect := Rect2(px, py, panel_w, panel_h)
+	draw_rect(panel_rect, PANEL_COLOR)
+	draw_rect(panel_rect, PANEL_BORDER, false, 1.4)
+
+	# Header
+	var creds: int = int(player_agent["credits"])
+	draw_string(font, Vector2(px + 12.0, py + 22.0), "HANDELSMENÜ — %d Cr" % creds, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, CREDIT_COLOR)
+
+	# Sort bar
+	var sort_x: float = px + 12.0
+	var sort_y: float = py + 36.0
+	sort_rect = Rect2(sort_x, sort_y, 100.0, 18.0)
+	dir_rect = Rect2(sort_x + 104.0, sort_y, 36.0, 18.0)
+	_draw_ui_button(sort_rect, "Sortierung: " + sort_key, false, font, 10)
+	_draw_ui_button(dir_rect, "↑" if sort_ascending else "↓", false, font, 10)
+
+	# Column headers
+	var header_y: float = py + 60.0
+	draw_string(font, Vector2(px + 12.0, header_y), "Ressource", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.65, 0.65, 0.65))
+	draw_string(font, Vector2(px + 195.0, header_y), "Station", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.65, 0.65, 0.65))
+	draw_string(font, Vector2(px + 255.0, header_y), "Inv", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.65, 0.65, 0.65))
+	draw_string(font, Vector2(px + 295.0, header_y), "Kaufen", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.65, 0.65, 0.65))
+	draw_string(font, Vector2(px + 370.0, header_y), "Verkaufen", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.65, 0.65, 0.65))
+
+	# Resource rows
+	var row_y: float = py + 72.0
+	var row_h := 32.0
+	for row in rows:
+		var rid: String = str(row["id"])
+		var is_selected: bool = rid == selected_resource_id
+		var row_rect := Rect2(px + 6.0, row_y, panel_w - 12.0, row_h)
+		var row_bg: Color = ROW_SELECTED_BG if is_selected else ROW_DEFAULT_BG
+		if not is_selected and hovered_control_id == "row:" + rid:
+			row_bg = ROW_HOVER_BG
+		draw_rect(row_rect, row_bg)
+
+		var tier: int = int(row["tier"])
+		var tier_col: Color = TIER_BORDER_COLOR.get(tier, Color.WHITE)
+		draw_rect(row_rect, tier_col, false, 0.8)
+		draw_rect(Rect2(px + 6.0, row_y, 3.0, row_h), tier_col)
+
+		# Icon + name
+		var res: Dictionary = RESOURCES[rid]
+		var icon: String = str(res["icon"])
+		draw_rect(Rect2(px + 12.0, row_y + 6.0, 20.0, 20.0), ICON_BG_COLOR)
+		draw_string(font, Vector2(px + 13.0, row_y + 22.0), icon, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, tier_col)
+		var rname: String = str(row["name"])
+		var tier_label: String = "T" + str(tier)
+		draw_string(font, Vector2(px + 36.0, row_y + 16.0), rname, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color.WHITE)
+		draw_string(font, Vector2(px + 36.0, row_y + 28.0), tier_label, HORIZONTAL_ALIGNMENT_LEFT, -1, 9, tier_col)
+
+		# Stock
+		var station_amt: int = int(row["station_amount"])
+		draw_string(font, Vector2(px + 195.0, row_y + 20.0), str(station_amt), HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color.WHITE)
+		var stock_lbl: String = get_stock_state_label(station, rid)
+		if stock_lbl != "":
+			draw_string(font, Vector2(px + 195.0 + STOCK_STATE_OFFSET * 0.4, row_y + 20.0), stock_lbl, HORIZONTAL_ALIGNMENT_LEFT, -1, 9, get_stock_state_color(stock_lbl))
+
+		# Player inventory
+		var player_amt: int = int(row["amount"])
+		draw_string(font, Vector2(px + 255.0, row_y + 20.0), str(player_amt), HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color.WHITE)
+
+		# Buy button
+		var buy_p: float = float(row["buy_price"])
+		var buy_b := Rect2(px + 285.0, row_y + 5.0, 68.0, 22.0)
+		var buy_hover: bool = hovered_control_id == "buy:" + rid
+		var buy_bg: Color = UI_BUTTON_HOVER_BG if buy_hover else BUY_BUTTON_COLOR
+		draw_rect(buy_b, buy_bg)
+		draw_rect(buy_b, PANEL_BORDER, false, 0.7)
+		draw_string(font, Vector2(px + 290.0, row_y + 20.0), "%d Cr" % int(buy_p), HORIZONTAL_ALIGNMENT_LEFT, -1, 10, GOOD_COLOR)
+		register_control("buy:" + rid, buy_b)
+
+		# Sell button
+		var sell_p: float = float(row["sell_price"])
+		var sell_b := Rect2(px + 360.0, row_y + 5.0, 68.0, 22.0)
+		var sell_hover: bool = hovered_control_id == "sell:" + rid
+		var sell_bg: Color = UI_BUTTON_HOVER_BG if sell_hover else SELL_BUTTON_COLOR
+		draw_rect(sell_b, sell_bg)
+		draw_rect(sell_b, PANEL_BORDER, false, 0.7)
+		draw_string(font, Vector2(px + 365.0, row_y + 20.0), "%d Cr" % int(sell_p), HORIZONTAL_ALIGNMENT_LEFT, -1, 10, BAD_COLOR)
+		register_control("sell:" + rid, sell_b)
+
+		register_control("row:" + rid, row_rect)
+		row_y += row_h + 2.0
+
+	# Quantity controls
+	var ctrl_y: float = row_y + 6.0
+	plus_one_rect = Rect2(px + 12.0, ctrl_y, 38.0, 22.0)
+	plus_five_rect = Rect2(px + 54.0, ctrl_y, 38.0, 22.0)
+	max_rect = Rect2(px + 96.0, ctrl_y, 48.0, 22.0)
+	sell_all_rect = Rect2(px + 148.0, ctrl_y, 60.0, 22.0)
+	_draw_ui_button(plus_one_rect, "+1", false, font, 11)
+	_draw_ui_button(plus_five_rect, "+5", false, font, 11)
+	_draw_ui_button(max_rect, "Max", false, font, 11)
+	_draw_ui_button(sell_all_rect, "Alles verk.", false, font, 10)
+	draw_string(font, Vector2(px + 220.0, ctrl_y + 16.0), "Menge: %d" % quantity, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color.WHITE)
+
+	buy_rect = Rect2(px + 330.0, ctrl_y, 80.0, 22.0)
+	sell_rect = Rect2(px + 416.0, ctrl_y, 80.0, 22.0)
+	_draw_ui_button(buy_rect, "Kaufen", false, font, 11)
+	_draw_ui_button(sell_rect, "Verkaufen", false, font, 11)
+
+	# Processing module section
+	if not station["modules"].is_empty():
+		var proc_y: float = ctrl_y + 34.0
+		draw_string(font, Vector2(px + 12.0, proc_y + 12.0), "── Verarbeitungsmodule ──", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.82, 0.6, 1.0))
+		proc_y += 18.0
+		var station_modules: Array = station["modules"]
+		for mod_id in station_modules:
+			var pmod: Dictionary = PROCESSING_MODULES[str(mod_id)]
+			var mod_name: String = str(pmod["display_name"])
+			var in_name: String = str(RESOURCES[str(pmod["input"])]["display_name"])
+			var out_name: String = str(RESOURCES[str(pmod["output"])]["display_name"])
+			var ratio: int = int(pmod["ratio"])
+			var fee: int = int(pmod["fee"])
+			var proc_info: String = mod_name + ": " + str(ratio) + "× " + in_name + " → 1× " + out_name + "  (Gebühr: " + str(fee) + " Cr)"
+			draw_string(font, Vector2(px + 12.0, proc_y + 14.0), proc_info, HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.82, 0.6, 1.0))
+			var proc_btn := Rect2(px + 420.0, proc_y, 88.0, 22.0)
+			var proc_hover: bool = hovered_control_id == "process:" + str(mod_id)
+			var proc_bg: Color = UI_BUTTON_HOVER_BG if proc_hover else PROCESS_BUTTON_COLOR
+			draw_rect(proc_btn, proc_bg)
+			draw_rect(proc_btn, PANEL_BORDER, false, 0.7)
+			draw_string(font, Vector2(px + 426.0, proc_y + 15.0), "Verarbeiten", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color.WHITE)
+			register_control("process:" + str(mod_id), proc_btn)
+			proc_y += 44.0
+
+
+func draw_trade_log_panel(vp: Vector2, font: Font) -> void:
+	var log_w := 240.0
+	var log_h := 190.0
+	var lx: float = vp.x - log_w - 10.0
+	var ly: float = vp.y - log_h - 10.0
+	var log_rect := Rect2(lx, ly, log_w, log_h)
+	draw_rect(log_rect, PANEL_COLOR)
+	draw_rect(log_rect, PANEL_BORDER, false, 1.1)
+	draw_string(font, Vector2(lx + 8.0, ly + 16.0), "Handelsverlauf", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, CREDIT_COLOR)
+	var entry_y: float = ly + 30.0
+	var recent_entries: Array = trade_log.slice(maxi(0, trade_log.size() - 9))
+	for entry in recent_entries:
+		draw_string(font, Vector2(lx + 8.0, entry_y), str(entry), HORIZONTAL_ALIGNMENT_LEFT, log_w - 16.0, 9, TRADE_LOG_COLOR)
+		entry_y += 16.0
+
+
+func _draw_ui_button(rect: Rect2, label: String, pressed: bool, font: Font, fsize: int) -> void:
+	var is_feedback: bool = feedback_control_id != "" and feedback_control_id == label
+	var is_hovered: bool = rect.has_point(mouse_position)
+	var bg: Color = UI_BUTTON_PRESS_BG if (pressed or is_feedback) else (UI_BUTTON_HOVER_BG if is_hovered else UI_BUTTON_BG)
+	draw_rect(rect, bg)
+	draw_rect(rect, PANEL_BORDER, false, 0.8)
+	draw_string(font, Vector2(rect.position.x + 5.0, rect.position.y + float(fsize) + 2.0), label, HORIZONTAL_ALIGNMENT_LEFT, -1, fsize, Color.WHITE)
+
+
+# ─── Control hit-testing ──────────────────────────────────────────────────────
+
+func register_control(id: String, rect: Rect2) -> void:
+	control_hit_rects.append({"id": id, "rect": rect})
+
+
+func update_hovered_control(redraw: bool) -> void:
+	var prev := hovered_control_id
+	hovered_control_id = ""
+	for entry in control_hit_rects:
+		if entry["rect"].has_point(mouse_position):
+			hovered_control_id = str(entry["id"])
+			break
+	if redraw and hovered_control_id != prev:
+		queue_redraw()
+
+
+func handle_left_click(pos: Vector2) -> void:
+	mouse_position = pos
+	update_hovered_control(false)
+
+	if sort_rect.has_point(pos):
+		cycle_sort(); queue_redraw(); return
+	if dir_rect.has_point(pos):
+		sort_ascending = not sort_ascending; queue_redraw(); return
+	if plus_one_rect.has_point(pos):
+		quantity = mini(999, quantity + 1); queue_redraw(); return
+	if plus_five_rect.has_point(pos):
+		quantity = mini(999, quantity + 5); queue_redraw(); return
+	if max_rect.has_point(pos):
+		quantity = int(player_agent["inventory"]["capacity"]); queue_redraw(); return
+	if sell_all_rect.has_point(pos):
+		attempt_sell_all(); queue_redraw(); return
+	if buy_rect.has_point(pos):
+		attempt_buy(selected_resource_id, quantity); queue_redraw(); return
+	if sell_rect.has_point(pos):
+		attempt_sell(selected_resource_id, quantity); queue_redraw(); return
+
+	for entry in control_hit_rects:
+		var cid: String = str(entry["id"])
+		var crect: Rect2 = entry["rect"]
+		if crect.has_point(pos):
+			if cid.begins_with("row:"):
+				selected_resource_id = cid.substr(4)
+				queue_redraw()
+				return
+			elif cid.begins_with("buy:"):
+				var rid: String = cid.substr(4)
+				attempt_buy(rid, quantity)
+				queue_redraw()
+				return
+			elif cid.begins_with("sell:"):
+				var rid: String = cid.substr(5)
+				attempt_sell(rid, quantity)
+				queue_redraw()
+				return
+			elif cid.begins_with("process:"):
+				var mid: String = cid.substr(8)
+				attempt_process(mid)
+				queue_redraw()
+				return
+
 
 # ─── Audio ────────────────────────────────────────────────────────────────────
 
 func setup_audio() -> void:
 	engine_player = AudioStreamPlayer.new()
-	engine_player.stream = create_tone_stream(0.10, 170.0, 210.0, 0.22)
-	engine_player.volume_db = -8.0
 	add_child(engine_player)
-
 	boost_player = AudioStreamPlayer.new()
-	boost_player.stream = create_tone_stream(0.16, 210.0, 420.0, 0.35)
-	boost_player.volume_db = -7.0
 	add_child(boost_player)
-
 	dock_start_player = AudioStreamPlayer.new()
-	dock_start_player.stream = create_tone_stream(0.20, 500.0, 280.0, 0.30)
-	dock_start_player.volume_db = -6.0
 	add_child(dock_start_player)
-
 	dock_complete_player = AudioStreamPlayer.new()
-	dock_complete_player.stream = create_tone_stream(0.35, 260.0, 640.0, 0.35)
-	dock_complete_player.volume_db = -5.0
 	add_child(dock_complete_player)
-
 	ui_hover_player = AudioStreamPlayer.new()
-	ui_hover_player.stream = create_tone_stream(0.04, 780.0, 860.0, 0.12)
-	ui_hover_player.volume_db = -18.0
 	add_child(ui_hover_player)
-
 	ui_click_player = AudioStreamPlayer.new()
-	ui_click_player.stream = create_tone_stream(0.05, 620.0, 520.0, 0.18)
-	ui_click_player.volume_db = -13.0
 	add_child(ui_click_player)
-
 	trade_success_player = AudioStreamPlayer.new()
-	trade_success_player.stream = create_tone_stream(0.12, 520.0, 760.0, 0.2)
-	trade_success_player.volume_db = -12.0
 	add_child(trade_success_player)
-
 	trade_fail_player = AudioStreamPlayer.new()
-	trade_fail_player.stream = create_tone_stream(0.1, 280.0, 190.0, 0.22)
-	trade_fail_player.volume_db = -11.0
 	add_child(trade_fail_player)
-
 	audio_prime_player = AudioStreamPlayer.new()
-	audio_prime_player.stream = create_tone_stream(0.03, 440.0, 440.0, 0.001)
-	audio_prime_player.volume_db = -80.0
 	add_child(audio_prime_player)
 
 
 func prime_audio() -> void:
-	if audio_primed:
-		return
-	audio_primed = true
-	if audio_prime_player != null:
-		audio_prime_player.play()
+	if not audio_primed:
+		audio_primed = true
 
-
-func play_ui_hover() -> void:
-	prime_audio()
-	if ui_hover_player != null:
-		ui_hover_player.play()
-
-
-func play_ui_click() -> void:
-	prime_audio()
-	if ui_click_player != null:
-		ui_click_player.play()
-
-
-func create_tone_stream(duration: float, freq_start: float, freq_end: float, amplitude: float) -> AudioStreamWAV:
-	var sample_rate := 44100
-	var sample_count := maxi(2, int(duration * sample_rate))
-	var data := PackedByteArray()
-	data.resize(sample_count * 2)
-	var phase := 0.0
-
-	for i in range(sample_count):
-		var t := float(i) / float(maxi(1, sample_count - 1))
-		var freq := lerpf(freq_start, freq_end, t)
-		phase += TAU * freq / float(sample_rate)
-		var envelope := pow(1.0 - t, 1.4)
-		var sample_value := sin(phase) * amplitude * envelope
-		data.encode_s16(i * 2, int(clampf(sample_value * 32767.0, -32767.0, 32767.0)))
-
-	var stream := AudioStreamWAV.new()
-	stream.format = AudioStreamWAV.FORMAT_16_BITS
-	stream.mix_rate = sample_rate
-	stream.stereo = false
-	stream.data = data
-	return stream
 
 # ─── Save / Load ──────────────────────────────────────────────────────────────
 
 func save_state() -> void:
-	var stations_data := []
-	for st in stations:
-		stations_data.append({
-			"id": st["id"],
-			"name": st["name"],
-			"type_id": st["type_id"],
-			"position": {"x": st["position"].x, "y": st["position"].y},
-			"distance": st["distance"],
-			"event_mod": st["event_mod"],
-			"target_stock": st["target_stock"].duplicate(),
-			"inventory": _save_inventory(st["inventory"])
-		})
-	var npcs_data := []
-	for npc in npcs:
-		var npc_cap: int = int(npc.get("cargo_capacity", 20))
-		npcs_data.append({
-			"name": str(npc["name"]),
-			"cargo_capacity": npc_cap,
-			"efficiency": float(npc["efficiency"]),
-			"home_station_id": str(npc.get("home_station_id", "")),
-			"credits": int(npc.get("credits", 400)),
-			"inventory": _save_inventory(npc.get("inventory", {"capacity": npc_cap, "stacks": {}}))
-		})
-	var save := {
+	var dir := DirAccess.open("user://")
+	if dir == null:
+		return
+	var save_data: Dictionary = {
 		"version": SAVE_VERSION,
-		"credits": int(player_agent["credits"]),
-		"player_position": {"x": player_position.x, "y": player_position.y},
-		"player_inventory": _save_inventory(player_agent["inventory"]),
-		"avg_buy_price": avg_buy_price.duplicate(),
-		"stations": stations_data,
-		"npcs": npcs_data,
-		"trade_log": trade_log.duplicate(),
+		"player_credits": float(player_agent["credits"]),
+		"player_inventory": player_agent["inventory"]["stacks"].duplicate(),
+		"player_position_x": float(player_position.x),
+		"player_position_y": float(player_position.y),
+		"current_system_id": current_system_id,
 		"goal_reached": goal_reached,
 		"has_own_station": has_own_station,
-		"selected_resource": selected_resource_id,
-		"quantity": quantity,
-		"search": search,
+		"trade_log": trade_log.duplicate(),
+		"avg_buy_price": avg_buy_price.duplicate(),
 		"sort_key": sort_key,
-		"sort_ascending": sort_ascending
+		"sort_ascending": sort_ascending,
+		"stations": [],
+		"npcs": []
 	}
+	for station in stations:
+		var st_data: Dictionary = {
+			"id": str(station["id"]),
+			"display_name": str(station["display_name"]),
+			"type_id": str(station["type_id"]),
+			"position_x": float(station["position"].x),
+			"position_y": float(station["position"].y),
+			"system_id": str(station["system_id"]),
+			"is_player_owned": bool(station["is_player_owned"]),
+			"modules": station["modules"].duplicate(),
+			"processing_income": int(station["processing_income"]),
+			"inventory_stacks": station["inventory"]["stacks"].duplicate()
+		}
+		save_data["stations"].append(st_data)
+	for npc in npcs:
+		var npc_data: Dictionary = {
+			"id": str(npc["id"]),
+			"anchor_station_id": str(npc["anchor_station_id"]),
+			"system_id": str(npc["system_id"]),
+			"dest_station_id": str(npc["dest_station_id"]),
+			"state": str(npc["state"]),
+			"position_x": float(npc["visual_position"].x),
+			"position_y": float(npc["visual_position"].y),
+			"credits": float(npc["credits"]),
+			"inventory_stacks": npc["inventory"]["stacks"].duplicate()
+		}
+		save_data["npcs"].append(npc_data)
+
 	var file := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
-	if file == null:
-		push_warning("Save failed: could not open file")
-		return
-	file.store_string(JSON.stringify(save))
-	file.close()
+	if file:
+		file.store_string(JSON.stringify(save_data, "\t"))
+		file.close()
 
 
 func load_state() -> void:
@@ -1680,99 +1996,118 @@ func load_state() -> void:
 	var file := FileAccess.open(SAVE_PATH, FileAccess.READ)
 	if file == null:
 		return
-	var content := file.get_as_text()
+	var raw: String = file.get_as_text()
 	file.close()
-	var parsed = JSON.parse_string(content)
-	if not parsed is Dictionary:
-		push_warning("Load failed: invalid save data")
+	if raw.strip_edges().is_empty():
 		return
-	var data: Dictionary = parsed
 
-	player_agent["credits"] = maxi(0, int(data.get("credits", 600)))
-	var pp = data.get("player_position", {"x": 130, "y": 120})
-	player_position = Vector2(float(pp.get("x", DEFAULT_PLAYER_POSITION.x)), float(pp.get("y", DEFAULT_PLAYER_POSITION.y)))
-	_restore_inventory(player_agent["inventory"], data.get("player_inventory", {}), CARGO_CAPACITY)
+	var parsed = JSON.parse_string(raw)
+	if parsed == null or not (parsed is Dictionary):
+		return
+	var save_data: Dictionary = parsed
+	var version: int = int(save_data.get("version", 0))
+	if version < SAVE_VERSION:
+		return
 
-	avg_buy_price.clear()
-	var abp = data.get("avg_buy_price", {})
-	if abp is Dictionary:
-		for k in abp:
-			avg_buy_price[k] = float(abp[k])
+	player_agent["credits"] = float(save_data.get("player_credits", 600))
+	var saved_inv = save_data.get("player_inventory", {})
+	if saved_inv is Dictionary:
+		player_agent["inventory"]["stacks"].clear()
+		for k in saved_inv.keys():
+			player_agent["inventory"]["stacks"][str(k)] = int(saved_inv[k])
+	player_position = Vector2(
+		float(save_data.get("player_position_x", DEFAULT_PLAYER_POSITION.x)),
+		float(save_data.get("player_position_y", DEFAULT_PLAYER_POSITION.y))
+	)
+	current_system_id = str(save_data.get("current_system_id", "ymir_prime"))
+	if not SYSTEMS.has(current_system_id):
+		current_system_id = "ymir_prime"
+	goal_reached = bool(save_data.get("goal_reached", false))
+	has_own_station = bool(save_data.get("has_own_station", false))
+	var saved_log = save_data.get("trade_log", [])
+	if saved_log is Array:
+		trade_log = []
+		for e in saved_log:
+			trade_log.append(str(e))
+	var saved_abp = save_data.get("avg_buy_price", {})
+	if saved_abp is Dictionary:
+		avg_buy_price.clear()
+		for k in saved_abp.keys():
+			avg_buy_price[str(k)] = float(saved_abp[k])
+	sort_key = str(save_data.get("sort_key", "value"))
+	sort_ascending = bool(save_data.get("sort_ascending", false))
 
-	var saved_stations = data.get("stations", [])
-	if saved_stations is Array and not saved_stations.is_empty():
+	var saved_stations = save_data.get("stations", [])
+	if saved_stations is Array and saved_stations.size() > 0:
 		stations.clear()
 		for st_data in saved_stations:
-			var type_id: String = str(st_data.get("type_id", "trade_station"))
-			if not STATION_TYPES.has(type_id):
-				type_id = "trade_station"
-			var sp = st_data.get("position", {"x": 0, "y": 0})
-			var station := create_station(
-				str(st_data.get("id", "")),
-				str(st_data.get("name", st_data.get("id", ""))),
-				Vector2(float(sp.get("x", 0)), float(sp.get("y", 0))),
-				type_id,
-				float(st_data.get("distance", 0)),
-				float(st_data.get("event_mod", 0))
-			)
-			var saved_ts = st_data.get("target_stock", {})
-			if saved_ts is Dictionary and not saved_ts.is_empty():
-				station["target_stock"].clear()
-				for resource_id in RESOURCE_IDS:
-					station["target_stock"][resource_id] = maxi(0, int(saved_ts.get(resource_id, STATION_TYPES[type_id]["target_stock"][resource_id])))
-			_restore_inventory(station["inventory"], st_data.get("inventory", {}), STATION_TYPES[type_id]["capacity"])
-			stations.append(station)
+			if not (st_data is Dictionary):
+				continue
+			var stype_id: String = str(st_data.get("type_id", "trade_hub"))
+			if not STATION_TYPES.has(stype_id):
+				continue
+			var stype: Dictionary = STATION_TYPES[stype_id]
+			var pos := Vector2(float(st_data.get("position_x", 300)), float(st_data.get("position_y", 300)))
+			var sys_id: String = str(st_data.get("system_id", "ymir_prime"))
+			if not SYSTEMS.has(sys_id):
+				sys_id = "ymir_prime"
+			var inventory: Dictionary = {"capacity": int(stype["capacity"]), "stacks": {}}
+			var saved_stacks = st_data.get("inventory_stacks", {})
+			if saved_stacks is Dictionary:
+				for k in saved_stacks.keys():
+					var rid: String = str(k)
+					if RESOURCES.has(rid):
+						inventory["stacks"][rid] = int(saved_stacks[k])
+			var modules_saved = st_data.get("modules", [])
+			var modules_copy: Array = []
+			if modules_saved is Array:
+				for m in modules_saved:
+					if PROCESSING_MODULES.has(str(m)):
+						modules_copy.append(str(m))
+			stations.append({
+				"id": str(st_data.get("id", "station_" + str(stations.size()))),
+				"display_name": str(st_data.get("display_name", "Station")),
+				"type_id": stype_id,
+				"position": pos,
+				"inventory": inventory,
+				"trade_log": [],
+				"is_player_owned": bool(st_data.get("is_player_owned", false)),
+				"system_id": sys_id,
+				"modules": modules_copy,
+				"processing_income": int(st_data.get("processing_income", 0))
+			})
 
-	# Restore NPC credits and inventories; state resets to idle on load
-	var saved_npcs = data.get("npcs", [])
-	if saved_npcs is Array and not saved_npcs.is_empty():
-		for i in range(mini(saved_npcs.size(), npcs.size())):
-			var nd = saved_npcs[i]
-			if nd is Dictionary:
-				var npc: Dictionary = npcs[i]
-				npc["credits"] = maxi(0, int(nd.get("credits", 400)))
-				var npc_cap: int = int(npc.get("cargo_capacity", 20))
-				_restore_inventory(npc["inventory"], nd.get("inventory", {}), npc_cap)
-				# In-transit cargo is dropped on reload; NPC resumes trading fresh
-				npc["state"] = "idle"
-				npc["cargo_amount"] = 0
-				npc["destination_station_id"] = ""
+	var saved_npcs = save_data.get("npcs", [])
+	if saved_npcs is Array and saved_npcs.size() > 0:
+		npcs.clear()
+		for npc_data in saved_npcs:
+			if not (npc_data is Dictionary):
+				continue
+			var npc_sys: String = str(npc_data.get("system_id", "ymir_prime"))
+			if not SYSTEMS.has(npc_sys):
+				npc_sys = "ymir_prime"
+			var npc_pos := Vector2(float(npc_data.get("position_x", 300)), float(npc_data.get("position_y", 300)))
+			var npc_stacks_saved = npc_data.get("inventory_stacks", {})
+			var npc_stacks: Dictionary = {}
+			if npc_stacks_saved is Dictionary:
+				for k in npc_stacks_saved.keys():
+					var rid: String = str(k)
+					if RESOURCES.has(rid):
+						npc_stacks[rid] = int(npc_stacks_saved[k])
+			npcs.append({
+				"id": str(npc_data.get("id", "npc_" + str(npcs.size()))),
+				"anchor_station_id": str(npc_data.get("anchor_station_id", "")),
+				"system_id": npc_sys,
+				"dest_station_id": str(npc_data.get("dest_station_id", "")),
+				"dest_system_id": "",
+				"state": str(npc_data.get("state", "idle")),
+				"position": npc_pos,
+				"visual_position": npc_pos,
+				"target_position": npc_pos,
+				"travel_progress": 0.0,
+				"travel_duration": 1.0,
+				"inventory": {"capacity": 24, "stacks": npc_stacks},
+				"credits": float(npc_data.get("credits", 200)),
+				"intersystem_travel_timer": 0.0
+			})
 
-	var tl = data.get("trade_log", [])
-	trade_log.clear()
-	if tl is Array:
-		for entry in tl:
-			if trade_log.size() >= MAX_TRADE_LOG:
-				break
-			trade_log.append(str(entry))
-
-	goal_reached = bool(data.get("goal_reached", false))
-	has_own_station = bool(data.get("has_own_station", false))
-	var sr: String = str(data.get("selected_resource", DEFAULT_RESOURCE_ID))
-	selected_resource_id = sr if RESOURCES.has(sr) else DEFAULT_RESOURCE_ID
-	quantity = maxi(1, int(data.get("quantity", 1)))
-	search = str(data.get("search", ""))
-	var sk: String = str(data.get("sort_key", "value"))
-	sort_key = sk if SORT_KEYS.has(sk) else "value"
-	sort_ascending = bool(data.get("sort_ascending", false))
-	sync_npc_visuals()
-
-
-func _save_inventory(inventory: Dictionary) -> Dictionary:
-	return {"capacity": inventory["capacity"], "stacks": inventory["stacks"].duplicate()}
-
-
-func _restore_inventory(target: Dictionary, source, fallback_capacity: int) -> void:
-	target["stacks"].clear()
-	if source is Dictionary:
-		var saved_cap := int(source.get("capacity", 0))
-		target["capacity"] = saved_cap if saved_cap > 0 else fallback_capacity
-		var stacks = source.get("stacks", {})
-		if stacks is Dictionary:
-			for resource_id in RESOURCE_IDS:
-				if stacks.has(resource_id):
-					var amount := int(stacks[resource_id])
-					if amount > 0:
-						target["stacks"][resource_id] = amount
-	else:
-		target["capacity"] = fallback_capacity
