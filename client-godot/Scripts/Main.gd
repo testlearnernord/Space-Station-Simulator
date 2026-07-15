@@ -1405,11 +1405,11 @@ func get_sorted_rows(station: Dictionary) -> Array:
 			"value": val, "unit_price": sell_p
 		})
 	rows.sort_custom(func(a, b):
-		var av = a[sort_key]
-		var bv = b[sort_key]
-		if typeof(av) == TYPE_STRING:
-			return (av < bv) if sort_ascending else (av > bv)
-		return (float(av) < float(bv)) if sort_ascending else (float(av) > float(bv))
+		var a_value = a[sort_key]
+		var b_value = b[sort_key]
+		if typeof(a_value) == TYPE_STRING:
+			return (a_value < b_value) if sort_ascending else (a_value > b_value)
+		return (float(a_value) < float(b_value)) if sort_ascending else (float(a_value) > float(b_value))
 	)
 	return rows
 
