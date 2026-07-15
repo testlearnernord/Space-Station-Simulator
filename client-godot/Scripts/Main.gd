@@ -26,13 +26,14 @@ const SAVE_TICK := 5.0
 const MAX_TRADE_LOG := 12
 const STARFIELD_COUNT := 95
 const NPC_VISUAL_SPEED := 180.0
-const NPC_VISUAL_MIN_TRAVEL := 1.3
-const NPC_VISUAL_MAX_TRAVEL := 4.2
+const NPC_VISUAL_MIN_TRAVEL := 4.0
+const NPC_VISUAL_MAX_TRAVEL := 10.0
 const NPC_IDLE_RADIUS := 4.0
 const NPC_ANCHOR_BASE_ANGLE := 0.95
 const NPC_ANCHOR_ANGLE_STEP := 1.63
-const NPC_IDLE_SPEED := 0.9
+const NPC_IDLE_SPEED := 0.25
 const NPC_IDLE_SWAY_RATIO := 1.17
+const NPC_HOVER_RADIUS := 12.0
 const SEED_VARIANCE_MIN := -6
 const SEED_VARIANCE_MAX := 6
 const MIN_INITIAL_STOCK := 2
@@ -69,6 +70,19 @@ const TIER_BORDER_COLOR := {
 
 const DEFAULT_RNG_SEED := 424242
 const NPC_MARKER_COLOR := Color(0.72, 0.95, 0.45, 0.92)
+const NPC_TOOLTIP_BG := Color(0.06, 0.10, 0.18, 0.94)
+const NPC_TOOLTIP_BORDER := Color(0.72, 0.95, 0.45, 0.75)
+
+const NPC_SHIP_NAMES := [
+	"Wanderer", "Eisenmaultier", "Corvus", "Sonnengleiter", "Blauer Blitz",
+	"Hafnium", "Staubläufer", "Nexus Star", "Freigeist", "Silberkante",
+	"Polarlicht", "Aschejäger", "Frachter X-7", "Rote Wolke", "Tiefenläufer",
+	"Aurora", "Stahlfalke", "Ventura", "Driftläufer", "Kobaltpfeil"
+]
+const NPC_FACTIONS := [
+	"Handelsgilde", "Bergbaukonsortium", "Freie Händler",
+	"Nexus Corp", "Kolonistenverband", "Raumwächter", "Fraktionslos"
+]
 const ROW_SELECTED_BG := Color(0.16, 0.24, 0.35, 0.96)
 const ROW_DEFAULT_BG := Color(0.12, 0.17, 0.26, 0.9)
 const ROW_HOVER_BG := Color(0.17, 0.24, 0.34, 0.95)
@@ -286,6 +300,7 @@ var dir_rect := Rect2()
 var control_hit_rects: Array = []
 var mouse_position := Vector2.ZERO
 var hovered_control_id := ""
+var hovered_npc_id := ""
 var feedback_control_id := ""
 var feedback_timer := 0.0
 
@@ -559,8 +574,12 @@ func create_npc(anchor_station_id: String, system_id: String) -> void:
 	var angle: float = float(npcs.size()) * NPC_ANCHOR_ANGLE_STEP + NPC_ANCHOR_BASE_ANGLE
 	var offset_dist: float = NPC_IDLE_RADIUS + float(npcs.size() % 6) * 2.2
 	var pos: Vector2 = anchor_station["position"] + Vector2(cos(angle) * offset_dist, sin(angle) * offset_dist)
+	var ship_name: String = str(NPC_SHIP_NAMES[rng.randi() % NPC_SHIP_NAMES.size()])
+	var faction: String = str(NPC_FACTIONS[rng.randi() % NPC_FACTIONS.size()])
 	npcs.append({
 		"id": "npc_" + str(npcs.size()),
+		"ship_name": ship_name,
+		"faction": faction,
 		"anchor_station_id": anchor_station_id,
 		"system_id": system_id,
 		"dest_station_id": "", "dest_system_id": "",
@@ -1616,7 +1635,75 @@ func draw_npc_markers() -> void:
 		if str(npc["state"]) == "traveling_intersystem":
 			continue
 		var vpos: Vector2 = npc["visual_position"]
-		draw_circle(vpos, 3.2, NPC_MARKER_COLOR)
+		var is_hovered: bool = str(npc["id"]) == hovered_npc_id
+		var dot_color: Color = Color(1.0, 1.0, 0.55, 1.0) if is_hovered else NPC_MARKER_COLOR
+		draw_circle(vpos, 3.2, dot_color)
+
+	if hovered_npc_id == "":
+		return
+	var tooltip_npc: Dictionary = {}
+	for npc in npcs:
+		if str(npc["id"]) == hovered_npc_id:
+			tooltip_npc = npc
+			break
+	if tooltip_npc.is_empty():
+		return
+	_draw_npc_tooltip(tooltip_npc)
+
+
+func _draw_npc_tooltip(npc: Dictionary) -> void:
+	var font: Font = ThemeDB.fallback_font
+	var vp: Vector2 = get_viewport_rect().size
+	var vpos: Vector2 = npc["visual_position"]
+
+	var ship_name: String = str(npc.get("ship_name", "Unbekannt"))
+	var faction: String = str(npc.get("faction", "Fraktionslos"))
+
+	# Build cargo lines
+	var cargo_lines: Array = []
+	var npc_inv: Dictionary = npc["inventory"]
+	var stacks: Dictionary = npc_inv["stacks"]
+	if stacks.is_empty():
+		cargo_lines.append("Leer")
+	else:
+		for rid in stacks.keys():
+			var amt: int = int(stacks[rid])
+			if amt > 0:
+				var res_name: String = str(RESOURCES[rid]["display_name"])
+				cargo_lines.append(res_name + ": " + str(amt))
+
+	# Tooltip dimensions
+	var line_h := 15
+	var pad := 8
+	var total_lines: int = 3 + cargo_lines.size()  # name + faction + "Fracht:" + cargo lines
+	var tooltip_w := 160
+	var tooltip_h: int = pad * 2 + total_lines * line_h
+
+	# Position tooltip near NPC, staying within viewport
+	var tx: float = vpos.x + 12.0
+	var ty: float = vpos.y - float(tooltip_h) * 0.5
+	if tx + float(tooltip_w) > vp.x - 4.0:
+		tx = vpos.x - float(tooltip_w) - 12.0
+	if ty < 4.0:
+		ty = 4.0
+	if ty + float(tooltip_h) > vp.y - 4.0:
+		ty = vp.y - float(tooltip_h) - 4.0
+
+	var bg_rect := Rect2(tx, ty, float(tooltip_w), float(tooltip_h))
+	draw_rect(bg_rect, NPC_TOOLTIP_BG)
+	draw_rect(bg_rect, NPC_TOOLTIP_BORDER, false, 1.2)
+
+	var ly: float = ty + float(pad) + float(line_h) - 3.0
+	draw_string(font, Vector2(tx + float(pad), ly), ship_name, HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1.0, 1.0, 0.6, 1.0))
+	ly += float(line_h)
+	draw_string(font, Vector2(tx + float(pad), ly), faction, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.72, 0.95, 0.45, 0.9))
+	ly += float(line_h)
+	draw_string(font, Vector2(tx + float(pad), ly), "Fracht:", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.65, 0.88, 1.0, 0.85))
+	ly += float(line_h)
+	for line in cargo_lines:
+		var cargo_line: String = str(line)
+		draw_string(font, Vector2(tx + float(pad) + 6.0, ly), cargo_line, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.9, 0.9, 0.9, 0.85))
+		ly += float(line_h)
 
 
 func draw_ship() -> void:
@@ -1850,13 +1937,25 @@ func register_control(id: String, rect: Rect2) -> void:
 
 
 func update_hovered_control(redraw: bool) -> void:
-	var prev := hovered_control_id
+	var prev_control := hovered_control_id
+	var prev_npc := hovered_npc_id
 	hovered_control_id = ""
 	for entry in control_hit_rects:
 		if entry["rect"].has_point(mouse_position):
 			hovered_control_id = str(entry["id"])
 			break
-	if redraw and hovered_control_id != prev:
+	hovered_npc_id = ""
+	if not is_docked:
+		for npc in npcs:
+			if str(npc["system_id"]) != current_system_id:
+				continue
+			if str(npc["state"]) == "traveling_intersystem":
+				continue
+			var vpos: Vector2 = npc["visual_position"]
+			if mouse_position.distance_to(vpos) <= NPC_HOVER_RADIUS:
+				hovered_npc_id = str(npc["id"])
+				break
+	if redraw and (hovered_control_id != prev_control or hovered_npc_id != prev_npc):
 		queue_redraw()
 
 
@@ -1973,6 +2072,8 @@ func save_state() -> void:
 	for npc in npcs:
 		var npc_data: Dictionary = {
 			"id": str(npc["id"]),
+			"ship_name": str(npc.get("ship_name", "")),
+			"faction": str(npc.get("faction", "")),
 			"anchor_station_id": str(npc["anchor_station_id"]),
 			"system_id": str(npc["system_id"]),
 			"dest_station_id": str(npc["dest_station_id"]),
@@ -2094,8 +2195,16 @@ func load_state() -> void:
 					var rid: String = str(k)
 					if RESOURCES.has(rid):
 						npc_stacks[rid] = int(npc_stacks_saved[k])
+			var saved_ship_name: String = str(npc_data.get("ship_name", ""))
+			if saved_ship_name.is_empty():
+				saved_ship_name = str(NPC_SHIP_NAMES[rng.randi() % NPC_SHIP_NAMES.size()])
+			var saved_faction: String = str(npc_data.get("faction", ""))
+			if saved_faction.is_empty():
+				saved_faction = str(NPC_FACTIONS[rng.randi() % NPC_FACTIONS.size()])
 			npcs.append({
 				"id": str(npc_data.get("id", "npc_" + str(npcs.size()))),
+				"ship_name": saved_ship_name,
+				"faction": saved_faction,
 				"anchor_station_id": str(npc_data.get("anchor_station_id", "")),
 				"system_id": npc_sys,
 				"dest_station_id": str(npc_data.get("dest_station_id", "")),
