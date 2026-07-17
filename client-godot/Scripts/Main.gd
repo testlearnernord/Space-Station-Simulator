@@ -11,7 +11,7 @@ const CARGO_CAPACITY := 32
 const RESET_HOTKEY := KEY_F8
 const RESET_HOTKEY_LABEL := "F8"
 const DEFAULT_PLAYER_POSITION := Vector2(130, 120)
-const DEFAULT_STATUS := "Fly with WASD, hold C near station to dock. Press %s to reset the run." % RESET_HOTKEY_LABEL
+const DEFAULT_STATUS := "Fly with WASD, hold C near station to dock, hold X near NPC to hail. Press %s to reset." % RESET_HOTKEY_LABEL
 
 const ACCELERATION := 520.0
 const DRAG := 360.0
@@ -26,8 +26,8 @@ const SAVE_TICK := 5.0
 const MAX_TRADE_LOG := 12
 const STARFIELD_COUNT := 95
 const NPC_VISUAL_SPEED := 180.0
-const NPC_VISUAL_MIN_TRAVEL := 4.0
-const NPC_VISUAL_MAX_TRAVEL := 10.0
+const NPC_VISUAL_MIN_TRAVEL := 20.0  # travel duration in seconds (5× slower than original 4.0)
+const NPC_VISUAL_MAX_TRAVEL := 50.0  # travel duration in seconds (5× slower than original 10.0)
 const NPC_IDLE_RADIUS := 4.0
 const NPC_ANCHOR_BASE_ANGLE := 0.95
 const NPC_ANCHOR_ANGLE_STEP := 1.63
@@ -55,6 +55,9 @@ const TRANSIT_ZONE := 22.0
 const TRANSITION_DURATION := 0.7
 const INTERSYSTEM_NPC_TRAVEL_TIME := 9.0
 
+const NPC_INTERACT_RANGE := 80.0
+const NPC_HAIL_HOLD_TIME := 1.5
+
 const STATION_COLOR := Color(0.35, 0.75, 1.0)
 const PLAYER_COLOR := Color(1.0, 0.86, 0.25)
 const PANEL_COLOR := Color(0.07, 0.1, 0.17, 0.92)
@@ -72,6 +75,11 @@ const DEFAULT_RNG_SEED := 424242
 const NPC_MARKER_COLOR := Color(0.72, 0.95, 0.45, 0.92)
 const NPC_TOOLTIP_BG := Color(0.06, 0.10, 0.18, 0.94)
 const NPC_TOOLTIP_BORDER := Color(0.72, 0.95, 0.45, 0.75)
+const NPC_HAIL_COLOR := Color(0.72, 0.95, 0.45, 0.88)
+const NPC_MENU_BG := Color(0.06, 0.09, 0.16, 0.96)
+const NPC_MENU_BORDER := Color(0.72, 0.95, 0.45, 0.82)
+const NPC_MENU_ACCENT := Color(0.72, 0.95, 0.45, 1.0)
+const NPC_MENU_SUBHEADING := Color(0.65, 0.88, 1.0, 0.9)
 
 const NPC_SHIP_NAMES := [
 	"Wanderer", "Eisenmaultier", "Corvus", "Sonnengleiter", "Blauer Blitz",
@@ -304,6 +312,14 @@ var hovered_npc_id := ""
 var feedback_control_id := ""
 var feedback_timer := 0.0
 
+var npc_hail_progress := 0.0
+var npc_hail_target_id := ""
+var is_npc_menu_open := false
+var npc_menu_npc: Dictionary = {}
+var npc_menu_page := "main"
+var npc_menu_selected_resource := ""
+var npc_menu_qty := 1
+
 var engine_player: AudioStreamPlayer
 var boost_player: AudioStreamPlayer
 var dock_start_player: AudioStreamPlayer
@@ -355,9 +371,12 @@ func _process(delta: float) -> void:
 			is_docked = false
 			docking_station = {}
 			status = "Undocked. Hold C near a station to dock again."
+	elif is_npc_menu_open:
+		player_velocity = Vector2.ZERO
 	else:
 		handle_movement(delta)
 		update_docking(delta)
+		update_npc_hail(delta)
 
 	economy_accumulator += delta
 	npc_accumulator += delta
@@ -423,6 +442,22 @@ func _unhandled_input(event: InputEvent) -> void:
 		handle_left_click(event.position)
 		return
 
+	# NPC menu keyboard handling (ESC and quantity controls for trade page)
+	if is_npc_menu_open:
+		if event is InputEventKey and event.pressed and not event.echo:
+			if event.keycode == KEY_ESCAPE:
+				close_npc_menu()
+				queue_redraw()
+				return
+			if npc_menu_page == "trade":
+				if event.keycode == KEY_KP_ADD or event.keycode == KEY_EQUAL:
+					npc_menu_qty = mini(999, npc_menu_qty + 1)
+					queue_redraw()
+				elif event.keycode == KEY_MINUS or event.keycode == KEY_KP_SUBTRACT:
+					npc_menu_qty = maxi(1, npc_menu_qty - 1)
+					queue_redraw()
+		return
+
 	if not is_docked:
 		return
 	if not (event is InputEventKey and event.pressed and not event.echo):
@@ -467,6 +502,8 @@ func _draw() -> void:
 	control_hit_rects.clear()
 	if is_docked and not docking_station.is_empty():
 		draw_trade_interface(docking_station)
+	elif is_npc_menu_open and not npc_menu_npc.is_empty():
+		draw_npc_menu()
 
 	if not toast_text.is_empty():
 		draw_toast()
@@ -498,6 +535,13 @@ func setup_defaults() -> void:
 	economy_accumulator = 0.0
 	npc_accumulator = 0.0
 	save_accumulator = 0.0
+	npc_hail_progress = 0.0
+	npc_hail_target_id = ""
+	is_npc_menu_open = false
+	npc_menu_npc = {}
+	npc_menu_page = "main"
+	npc_menu_selected_resource = ""
+	npc_menu_qty = 1
 	player_agent = {"credits": 600, "inventory": {"capacity": CARGO_CAPACITY, "stacks": {}}}
 	spawn_all_systems()
 
@@ -1629,15 +1673,29 @@ func draw_station_node(station: Dictionary, idx: int) -> void:
 
 
 func draw_npc_markers() -> void:
+	var font: Font = ThemeDB.fallback_font
 	for npc in npcs:
 		if str(npc["system_id"]) != current_system_id:
 			continue
 		if str(npc["state"]) == "traveling_intersystem":
 			continue
 		var vpos: Vector2 = npc["visual_position"]
-		var is_hovered: bool = str(npc["id"]) == hovered_npc_id
+		var npc_id: String = str(npc["id"])
+		var is_hovered: bool = npc_id == hovered_npc_id
+		var is_hailing: bool = npc_id == npc_hail_target_id and npc_hail_progress > 0.0
 		var dot_color: Color = Color(1.0, 1.0, 0.55, 1.0) if is_hovered else NPC_MARKER_COLOR
 		draw_circle(vpos, 3.2, dot_color)
+
+		# Hailing progress arc
+		if is_hailing:
+			var hail_prog: float = npc_hail_progress / NPC_HAIL_HOLD_TIME
+			draw_arc(vpos, 12.0, -PI * 0.5, -PI * 0.5 + hail_prog * TAU, 24, NPC_HAIL_COLOR, 2.5)
+
+		# "X halten" hint when player is near and not already hailing or in menu
+		if not is_npc_menu_open and not is_hailing:
+			var dist: float = player_position.distance_to(vpos)
+			if dist < NPC_INTERACT_RANGE:
+				draw_string(font, vpos + Vector2(-18.0, -10.0), "X halten", HORIZONTAL_ALIGNMENT_LEFT, -1, 9, Color(0.72, 0.95, 0.45, 0.7))
 
 	if hovered_npc_id == "":
 		return
@@ -1963,6 +2021,11 @@ func handle_left_click(pos: Vector2) -> void:
 	mouse_position = pos
 	update_hovered_control(false)
 
+	# NPC menu takes priority when open
+	if is_npc_menu_open:
+		_handle_npc_menu_click(pos)
+		return
+
 	if sort_rect.has_point(pos):
 		cycle_sort(); queue_redraw(); return
 	if dir_rect.has_point(pos):
@@ -2003,6 +2066,461 @@ func handle_left_click(pos: Vector2) -> void:
 				attempt_process(mid)
 				queue_redraw()
 				return
+
+
+# ─── NPC Hailing & Interaction ────────────────────────────────────────────────
+
+func find_nearest_npc_in_interact_range() -> Dictionary:
+	var best: Dictionary = {}
+	var best_dist := INF
+	for npc in npcs:
+		if str(npc["system_id"]) != current_system_id:
+			continue
+		if str(npc["state"]) == "traveling_intersystem":
+			continue
+		var vpos: Vector2 = npc["visual_position"]
+		var d: float = player_position.distance_to(vpos)
+		if d < NPC_INTERACT_RANGE and d < best_dist:
+			best_dist = d
+			best = npc
+	return best
+
+
+func update_npc_hail(delta: float) -> void:
+	var hail_held: bool = Input.is_action_pressed("hail")
+	if not hail_held:
+		if npc_hail_progress > 0.0:
+			npc_hail_progress = 0.0
+			npc_hail_target_id = ""
+			queue_redraw()
+		return
+
+	var nearest: Dictionary = find_nearest_npc_in_interact_range()
+	if nearest.is_empty():
+		npc_hail_progress = 0.0
+		npc_hail_target_id = ""
+		return
+
+	var nid: String = str(nearest["id"])
+	if npc_hail_target_id != nid:
+		npc_hail_progress = 0.0
+		npc_hail_target_id = nid
+
+	npc_hail_progress = minf(npc_hail_progress + delta, NPC_HAIL_HOLD_TIME)
+	var ship_name: String = str(nearest.get("ship_name", "NPC"))
+	status = "Halte X — anfunken: " + ship_name + " ..."
+
+	if npc_hail_progress >= NPC_HAIL_HOLD_TIME:
+		npc_hail_progress = 0.0
+		npc_hail_target_id = ""
+		open_npc_menu(nearest)
+
+
+func open_npc_menu(npc: Dictionary) -> void:
+	is_npc_menu_open = true
+	npc_menu_npc = npc
+	npc_menu_page = "main"
+	npc_menu_selected_resource = ""
+	npc_menu_qty = 1
+	var ship_name: String = str(npc.get("ship_name", "NPC"))
+	show_toast("Verbindung hergestellt: " + ship_name, 1.8)
+	status = "NPC-Menü offen — ESC oder Schließen zum Verlassen."
+	queue_redraw()
+
+
+func close_npc_menu() -> void:
+	is_npc_menu_open = false
+	npc_menu_npc = {}
+	npc_menu_page = "main"
+	npc_menu_selected_resource = ""
+	npc_menu_qty = 1
+	status = DEFAULT_STATUS
+
+
+func _handle_npc_menu_click(pos: Vector2) -> void:
+	var npc: Dictionary = npc_menu_npc
+	for entry in control_hit_rects:
+		var cid: String = str(entry["id"])
+		var crect: Rect2 = entry["rect"]
+		if not crect.has_point(pos):
+			continue
+		if cid == "npc_menu:trade":
+			npc_menu_page = "trade"
+			npc_menu_selected_resource = ""
+			queue_redraw()
+			return
+		elif cid == "npc_menu:mission":
+			npc_menu_page = "mission"
+			queue_redraw()
+			return
+		elif cid == "npc_menu:close":
+			close_npc_menu()
+			queue_redraw()
+			return
+		elif cid == "npc_trade:back" or cid == "npc_mission:back":
+			npc_menu_page = "main"
+			queue_redraw()
+			return
+		elif cid == "npc_trade:plus_one":
+			npc_menu_qty = mini(999, npc_menu_qty + 1)
+			queue_redraw()
+			return
+		elif cid == "npc_trade:plus_five":
+			npc_menu_qty = mini(999, npc_menu_qty + 5)
+			queue_redraw()
+			return
+		elif cid == "npc_trade:max":
+			npc_menu_qty = int(player_agent["inventory"]["capacity"])
+			queue_redraw()
+			return
+		elif cid.begins_with("npc_trade:row:"):
+			npc_menu_selected_resource = cid.substr(14)
+			queue_redraw()
+			return
+		elif cid.begins_with("npc_trade:buy:"):
+			var rid: String = cid.substr(14)
+			attempt_npc_buy(npc, rid, npc_menu_qty)
+			queue_redraw()
+			return
+		elif cid.begins_with("npc_trade:sell:"):
+			var rid: String = cid.substr(15)
+			attempt_npc_sell(npc, rid, npc_menu_qty)
+			queue_redraw()
+			return
+
+
+func attempt_npc_buy(npc: Dictionary, resource_id: String, qty: int) -> void:
+	var npc_stacks: Dictionary = npc["inventory"]["stacks"]
+	var npc_have: int = npc_stacks.get(resource_id, 0)
+	if npc_have <= 0:
+		var res_name: String = str(RESOURCES[resource_id]["display_name"])
+		show_toast("NPC hat " + res_name + " nicht vorrätig.", 2.0)
+		return
+	var actual_qty: int = mini(qty, npc_have)
+	var inv: Dictionary = player_agent["inventory"]
+	var pstacks: Dictionary = inv["stacks"]
+	var used: int = pstacks.values().reduce(func(a, b): return a + b, 0)
+	var room: int = int(inv["capacity"]) - used
+	actual_qty = mini(actual_qty, room)
+	if actual_qty <= 0:
+		show_toast("Frachtraum voll!", 2.0)
+		return
+	var unit_price: float = float(RESOURCES[resource_id]["base_price"]) * 1.1
+	var total_price: float = float(actual_qty) * unit_price
+	if float(player_agent["credits"]) < total_price:
+		show_toast("Nicht genug Credits! (" + str(int(total_price)) + " Cr benötigt)", 2.0)
+		return
+	npc_stacks[resource_id] = npc_have - actual_qty
+	pstacks[resource_id] = pstacks.get(resource_id, 0) + actual_qty
+	player_agent["credits"] = float(player_agent["credits"]) - total_price
+	npc["credits"] = float(npc["credits"]) + total_price
+	var res_name: String = str(RESOURCES[resource_id]["display_name"])
+	var log_entry: String = "NPC-Kauf: " + str(actual_qty) + "× " + res_name + " für " + str(int(total_price)) + " Cr"
+	add_trade_log(log_entry)
+	show_toast(log_entry, 1.8)
+
+
+func attempt_npc_sell(npc: Dictionary, resource_id: String, qty: int) -> void:
+	var pstacks: Dictionary = player_agent["inventory"]["stacks"]
+	var player_have: int = pstacks.get(resource_id, 0)
+	if player_have <= 0:
+		show_toast("Nicht im Inventar.", 2.0)
+		return
+	var npc_inv: Dictionary = npc["inventory"]
+	var npc_stacks: Dictionary = npc_inv["stacks"]
+	var npc_used: int = npc_stacks.values().reduce(func(a, b): return a + b, 0)
+	var npc_cap: int = int(npc_inv["capacity"])
+	var npc_room: int = npc_cap - npc_used
+	if npc_room <= 0:
+		show_toast("NPC-Laderaum ist voll!", 2.0)
+		return
+	var unit_price: float = float(RESOURCES[resource_id]["base_price"]) * 0.88
+	var npc_credits: float = float(npc["credits"])
+	var max_by_credits: int = int(npc_credits / maxf(unit_price, 0.01))
+	var actual_qty: int = mini(mini(mini(qty, player_have), npc_room), max_by_credits)
+	if actual_qty <= 0:
+		show_toast("NPC hat keine Credits mehr!", 2.0)
+		return
+	var total_price: float = float(actual_qty) * unit_price
+	pstacks[resource_id] = player_have - actual_qty
+	npc_stacks[resource_id] = npc_stacks.get(resource_id, 0) + actual_qty
+	player_agent["credits"] = float(player_agent["credits"]) + total_price
+	npc["credits"] = npc_credits - total_price
+	var res_name: String = str(RESOURCES[resource_id]["display_name"])
+	var log_entry: String = "NPC-Verkauf: " + str(actual_qty) + "× " + res_name + " für " + str(int(total_price)) + " Cr"
+	add_trade_log(log_entry)
+	show_toast(log_entry, 1.8)
+
+
+func get_npc_mission_text(npc: Dictionary) -> Array:
+	var lines: Array = []
+	var state: String = str(npc["state"])
+	match state:
+		"idle":
+			lines.append("Sucht nach Handelsmöglichkeiten")
+		"traveling_to_buy":
+			var dest_id: String = str(npc["dest_station_id"])
+			var dest: Dictionary = get_station_by_id(dest_id)
+			var dest_name: String = str(dest["display_name"]) if not dest.is_empty() else "eine Station"
+			lines.append("Fliegt zu " + dest_name)
+			lines.append("  um Waren einzukaufen")
+		"buying":
+			var dest_id: String = str(npc["dest_station_id"])
+			var dest: Dictionary = get_station_by_id(dest_id)
+			var dest_name: String = str(dest["display_name"]) if not dest.is_empty() else "einer Station"
+			lines.append("Kauft Waren bei " + dest_name)
+		"traveling_to_sell":
+			var dest_id: String = str(npc["dest_station_id"])
+			var dest: Dictionary = get_station_by_id(dest_id)
+			var dest_name: String = str(dest["display_name"]) if not dest.is_empty() else "eine Station"
+			lines.append("Fliegt zu " + dest_name)
+			lines.append("  um Waren zu verkaufen")
+			var npc_stacks: Dictionary = npc["inventory"]["stacks"]
+			for rid in npc_stacks.keys():
+				var amt: int = int(npc_stacks[rid])
+				if amt > 0:
+					var rname: String = str(RESOURCES[rid]["display_name"])
+					lines.append("  Lader: " + rname + " ×" + str(amt))
+		"selling":
+			var dest_id: String = str(npc["dest_station_id"])
+			var dest: Dictionary = get_station_by_id(dest_id)
+			var dest_name: String = str(dest["display_name"]) if not dest.is_empty() else "einer Station"
+			lines.append("Verkauft Waren bei " + dest_name)
+		"traveling_to_process":
+			lines.append("Fliegt zur Verarbeitungsstation")
+		"processing":
+			lines.append("Verarbeitet Güter an einer Station")
+		"traveling_intersystem":
+			lines.append("Reist in ein anderes Sternensystem")
+		_:
+			lines.append("Status unbekannt")
+	return lines
+
+
+func get_trade_tip_for_npc(npc: Dictionary) -> Array:
+	var tip_lines: Array = []
+	var sys_id: String = str(npc["system_id"])
+	var route: Dictionary = find_npc_trade_route(sys_id)
+	if route.is_empty():
+		tip_lines.append("Keine profitablen Routen im System.")
+		return tip_lines
+	var buy_id: String = str(route["buy_station_id"])
+	var sell_id: String = str(route["sell_station_id"])
+	var rid: String = str(route["resource_id"])
+	var buy_st: Dictionary = get_station_by_id(buy_id)
+	var sell_st: Dictionary = get_station_by_id(sell_id)
+	if buy_st.is_empty() or sell_st.is_empty():
+		tip_lines.append("Keine Route gefunden.")
+		return tip_lines
+	var buy_p: float = compute_buy_price(buy_st, rid)
+	var sell_p: float = compute_sell_price(sell_st, rid)
+	var profit: float = sell_p - buy_p
+	var res_name: String = str(RESOURCES[rid]["display_name"])
+	var buy_name: String = str(buy_st["display_name"])
+	var sell_name: String = str(sell_st["display_name"])
+	tip_lines.append(res_name + " kaufen bei:")
+	tip_lines.append("  " + buy_name)
+	tip_lines.append("  (" + str(int(buy_p)) + " Cr/Einheit)")
+	tip_lines.append("Verkaufen bei:")
+	tip_lines.append("  " + sell_name)
+	tip_lines.append("  (" + str(int(sell_p)) + " Cr/Einheit)")
+	tip_lines.append("Profit: +" + str(int(profit)) + " Cr/Einheit")
+	return tip_lines
+
+
+# ─── NPC Menu Drawing ─────────────────────────────────────────────────────────
+
+func draw_npc_menu() -> void:
+	var npc: Dictionary = npc_menu_npc
+	var page: String = npc_menu_page
+	match page:
+		"main":
+			_draw_npc_menu_main(npc)
+		"trade":
+			_draw_npc_menu_trade(npc)
+		"mission":
+			_draw_npc_menu_mission(npc)
+
+
+func _draw_npc_menu_main(npc: Dictionary) -> void:
+	var font: Font = ThemeDB.fallback_font
+	var vp: Vector2 = get_viewport_rect().size
+	var ship_name: String = str(npc.get("ship_name", "Unbekannt"))
+	var faction: String = str(npc.get("faction", "Fraktionslos"))
+	var npc_creds: int = int(npc["credits"])
+	var npc_inv: Dictionary = npc["inventory"]
+	var npc_stacks: Dictionary = npc_inv["stacks"]
+	var npc_used: int = npc_stacks.values().reduce(func(a, b): return a + b, 0)
+	var npc_cap: int = int(npc_inv["capacity"])
+
+	var w := 300.0
+	var h := 185.0
+	var px: float = (vp.x - w) * 0.5
+	var py: float = (vp.y - h) * 0.5
+
+	draw_rect(Rect2(px, py, w, h), NPC_MENU_BG)
+	draw_rect(Rect2(px, py, w, h), NPC_MENU_BORDER, false, 1.5)
+
+	draw_string(font, Vector2(px + 12.0, py + 22.0), ship_name, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, NPC_MENU_ACCENT)
+	draw_string(font, Vector2(px + 12.0, py + 38.0), faction, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, NPC_MARKER_COLOR)
+	draw_string(font, Vector2(px + 12.0, py + 54.0), "Laderaum: %d/%d   Credits: %d Cr" % [npc_used, npc_cap, npc_creds], HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.75, 0.75, 0.75))
+
+	var btn_w: float = w - 40.0
+	var btn_h := 26.0
+	var bx: float = px + 20.0
+
+	var trade_btn := Rect2(bx, py + 70.0, btn_w, btn_h)
+	var mission_btn := Rect2(bx, py + 102.0, btn_w, btn_h)
+	var close_btn := Rect2(bx, py + 146.0, btn_w, btn_h)
+
+	_draw_ui_button(trade_btn, "1. Handeln", false, font, 12)
+	_draw_ui_button(mission_btn, "2. Was ist deine Mission?", false, font, 12)
+	_draw_ui_button(close_btn, "Schließen  [ESC]", false, font, 12)
+
+	register_control("npc_menu:trade", trade_btn)
+	register_control("npc_menu:mission", mission_btn)
+	register_control("npc_menu:close", close_btn)
+
+
+func _draw_npc_menu_trade(npc: Dictionary) -> void:
+	var font: Font = ThemeDB.fallback_font
+	var vp: Vector2 = get_viewport_rect().size
+	var ship_name: String = str(npc.get("ship_name", "Unbekannt"))
+	var npc_inv: Dictionary = npc["inventory"]
+	var npc_stacks: Dictionary = npc_inv["stacks"]
+	var npc_cap: int = int(npc_inv["capacity"])
+	var npc_used: int = npc_stacks.values().reduce(func(a, b): return a + b, 0)
+	var npc_creds: int = int(npc["credits"])
+	var pstacks: Dictionary = player_agent["inventory"]["stacks"]
+
+	var panel_w := 520.0
+	var row_h := 30.0
+	var header_h := 100.0
+	var ctrl_h := 40.0
+	var panel_h: float = header_h + float(RESOURCE_IDS.size()) * (row_h + 2.0) + ctrl_h
+	var px: float = (vp.x - panel_w) * 0.5
+	var py: float = (vp.y - panel_h) * 0.5
+
+	draw_rect(Rect2(px, py, panel_w, panel_h), NPC_MENU_BG)
+	draw_rect(Rect2(px, py, panel_w, panel_h), NPC_MENU_BORDER, false, 1.5)
+
+	draw_string(font, Vector2(px + 12.0, py + 22.0), "Handel mit " + ship_name, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, NPC_MENU_ACCENT)
+	draw_string(font, Vector2(px + 12.0, py + 38.0), "Laderaum: %d/%d   Credits: %d Cr" % [npc_used, npc_cap, npc_creds], HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.75, 0.75, 0.75))
+	draw_string(font, Vector2(px + 12.0, py + 54.0), "Kaufen v. NPC: Basispreis ×1.1   |   Verkaufen an NPC: Basispreis ×0.88", HORIZONTAL_ALIGNMENT_LEFT, -1, 9, Color(0.65, 0.65, 0.65))
+
+	var header_y: float = py + 70.0
+	draw_string(font, Vector2(px + 12.0, header_y), "Ressource", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.6, 0.6, 0.6))
+	draw_string(font, Vector2(px + 200.0, header_y), "NPC", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.6, 0.6, 0.6))
+	draw_string(font, Vector2(px + 250.0, header_y), "Inv", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.6, 0.6, 0.6))
+	draw_string(font, Vector2(px + 288.0, header_y), "Kaufen", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.6, 0.6, 0.6))
+	draw_string(font, Vector2(px + 378.0, header_y), "Verkaufen", HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.6, 0.6, 0.6))
+
+	var row_y: float = py + header_h - 16.0
+	for rid in RESOURCE_IDS:
+		var res: Dictionary = RESOURCES[rid]
+		var npc_amt: int = npc_stacks.get(rid, 0)
+		var player_amt: int = pstacks.get(rid, 0)
+		var base: float = float(res["base_price"])
+		var npc_sell_price: float = base * 1.1
+		var npc_buy_price: float = base * 0.88
+
+		var is_selected: bool = rid == npc_menu_selected_resource
+		var row_rect := Rect2(px + 6.0, row_y, panel_w - 12.0, row_h)
+		var row_bg: Color = ROW_SELECTED_BG if is_selected else ROW_DEFAULT_BG
+		if not is_selected and hovered_control_id == "npc_trade:row:" + rid:
+			row_bg = ROW_HOVER_BG
+		draw_rect(row_rect, row_bg)
+
+		var tier: int = int(res["tier"])
+		var tier_col: Color = TIER_BORDER_COLOR.get(tier, Color.WHITE)
+		draw_rect(row_rect, tier_col, false, 0.8)
+		draw_rect(Rect2(px + 6.0, row_y, 3.0, row_h), tier_col)
+
+		var icon: String = str(res["icon"])
+		draw_rect(Rect2(px + 12.0, row_y + 5.0, 20.0, 20.0), ICON_BG_COLOR)
+		draw_string(font, Vector2(px + 13.0, row_y + 20.0), icon, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, tier_col)
+		var rname: String = str(res["display_name"])
+		draw_string(font, Vector2(px + 36.0, row_y + 17.0), rname, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color.WHITE)
+
+		draw_string(font, Vector2(px + 200.0, row_y + 19.0), str(npc_amt), HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color.WHITE)
+		draw_string(font, Vector2(px + 250.0, row_y + 19.0), str(player_amt), HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color.WHITE)
+
+		if npc_amt > 0:
+			var buy_b := Rect2(px + 278.0, row_y + 4.0, 84.0, 22.0)
+			var buy_hover: bool = hovered_control_id == "npc_trade:buy:" + rid
+			var buy_bg: Color = UI_BUTTON_HOVER_BG if buy_hover else BUY_BUTTON_COLOR
+			draw_rect(buy_b, buy_bg)
+			draw_rect(buy_b, PANEL_BORDER, false, 0.7)
+			draw_string(font, Vector2(px + 283.0, row_y + 18.0), "%d Cr" % int(npc_sell_price), HORIZONTAL_ALIGNMENT_LEFT, -1, 10, GOOD_COLOR)
+			register_control("npc_trade:buy:" + rid, buy_b)
+
+		if player_amt > 0:
+			var sell_b := Rect2(px + 368.0, row_y + 4.0, 84.0, 22.0)
+			var sell_hover: bool = hovered_control_id == "npc_trade:sell:" + rid
+			var sell_bg: Color = UI_BUTTON_HOVER_BG if sell_hover else SELL_BUTTON_COLOR
+			draw_rect(sell_b, sell_bg)
+			draw_rect(sell_b, PANEL_BORDER, false, 0.7)
+			draw_string(font, Vector2(px + 373.0, row_y + 18.0), "%d Cr" % int(npc_buy_price), HORIZONTAL_ALIGNMENT_LEFT, -1, 10, BAD_COLOR)
+			register_control("npc_trade:sell:" + rid, sell_b)
+
+		register_control("npc_trade:row:" + rid, row_rect)
+		row_y += row_h + 2.0
+
+	var ctrl_y: float = row_y + 4.0
+	var tp1 := Rect2(px + 12.0, ctrl_y, 38.0, 22.0)
+	var tp5 := Rect2(px + 54.0, ctrl_y, 38.0, 22.0)
+	var tpm := Rect2(px + 96.0, ctrl_y, 48.0, 22.0)
+	_draw_ui_button(tp1, "+1", false, font, 11)
+	_draw_ui_button(tp5, "+5", false, font, 11)
+	_draw_ui_button(tpm, "Max", false, font, 11)
+	draw_string(font, Vector2(px + 160.0, ctrl_y + 16.0), "Menge: %d" % npc_menu_qty, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color.WHITE)
+	register_control("npc_trade:plus_one", tp1)
+	register_control("npc_trade:plus_five", tp5)
+	register_control("npc_trade:max", tpm)
+
+	var back_btn := Rect2(px + panel_w - 140.0, ctrl_y, 120.0, 22.0)
+	_draw_ui_button(back_btn, "◀ Zurück", false, font, 11)
+	register_control("npc_trade:back", back_btn)
+
+
+func _draw_npc_menu_mission(npc: Dictionary) -> void:
+	var font: Font = ThemeDB.fallback_font
+	var vp: Vector2 = get_viewport_rect().size
+	var ship_name: String = str(npc.get("ship_name", "Unbekannt"))
+
+	var mission_lines: Array = get_npc_mission_text(npc)
+	var tip_lines: Array = get_trade_tip_for_npc(npc)
+
+	var line_h := 16
+	var total_lines: int = mission_lines.size() + tip_lines.size() + 4
+	var panel_w := 340.0
+	var panel_h: float = 80.0 + float(total_lines * line_h) + 34.0
+	var px: float = (vp.x - panel_w) * 0.5
+	var py: float = (vp.y - panel_h) * 0.5
+
+	draw_rect(Rect2(px, py, panel_w, panel_h), NPC_MENU_BG)
+	draw_rect(Rect2(px, py, panel_w, panel_h), NPC_MENU_BORDER, false, 1.5)
+
+	draw_string(font, Vector2(px + 12.0, py + 22.0), "Mission: " + ship_name, HORIZONTAL_ALIGNMENT_LEFT, -1, 13, NPC_MENU_ACCENT)
+
+	var ly: float = py + 44.0
+	draw_string(font, Vector2(px + 12.0, ly), "── Aktueller Auftrag ──", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, NPC_MARKER_COLOR)
+	ly += float(line_h)
+	for line in mission_lines:
+		draw_string(font, Vector2(px + 16.0, ly), str(line), HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color.WHITE)
+		ly += float(line_h)
+
+	ly += 6.0
+	draw_string(font, Vector2(px + 12.0, ly), "── Handelstipp (aktuelles System) ──", HORIZONTAL_ALIGNMENT_LEFT, -1, 11, CREDIT_COLOR)
+	ly += float(line_h)
+	for line in tip_lines:
+		draw_string(font, Vector2(px + 16.0, ly), str(line), HORIZONTAL_ALIGNMENT_LEFT, -1, 11, Color(0.82, 0.92, 0.72))
+		ly += float(line_h)
+
+	ly += 8.0
+	var back_btn := Rect2(px + (panel_w - 120.0) * 0.5, ly, 120.0, 22.0)
+	_draw_ui_button(back_btn, "◀ Zurück", false, font, 11)
+	register_control("npc_mission:back", back_btn)
 
 
 # ─── Audio ────────────────────────────────────────────────────────────────────
