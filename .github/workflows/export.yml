@@ -44,12 +44,10 @@ jobs:
 
     - name: Patch web export for GitHub Pages
       run: |
-        # Download coi-serviceworker so GitHub Pages can serve the game without
-        # requiring COOP/COEP headers (needed for SharedArrayBuffer / WebAssembly threads)
-        curl -sSL "https://cdn.jsdelivr.net/npm/coi-serviceworker@0.1.7/coi-serviceworker.min.js" \
-          -o client-godot/exports/web/coi-serviceworker.js
-        # Inject the service-worker script before the Godot engine loader
-        sed -i 's|<script src="index.js"></script>|<script src="coi-serviceworker.js"></script>\n\t\t<script src="index.js"></script>|' \
+        # Godot 4.3 exports a no-thread web build here, so GitHub Pages does not
+        # need the COOP/COEP service-worker workaround. Keep the exported HTML in
+        # plain mode to avoid service-worker reload/caching issues on Pages.
+        sed -i 's|"ensureCrossOriginIsolationHeaders":true|"ensureCrossOriginIsolationHeaders":false|' \
           client-godot/exports/web/index.html
 
     - name: Configure Pages
