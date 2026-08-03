@@ -8,3 +8,4 @@ public readonly record struct SystemId(int Value);
 public readonly record struct StationId(int Value);
 public readonly record struct ShipId(int Value);
 public readonly record struct CommodityId(int Value);
+public readonly record struct AgentId(int Value);
