@@ -1499,14 +1499,24 @@ func add_trade_log(entry: String) -> void:
 	save_checkpoint()
 
 
+var _web_save_queued: bool = false
+
 func is_web_export() -> bool:
 	return OS.has_feature("web")
 
 
 func save_checkpoint() -> void:
-	if is_web_export():
-		save_state()
+	if not is_web_export():
+		return
+	if _web_save_queued:
+		return
+	_web_save_queued = true
+	call_deferred("_flush_web_checkpoint")
 
+
+func _flush_web_checkpoint() -> void:
+	_web_save_queued = false
+	save_state()
 
 func show_toast(text: String, duration: float) -> void:
 	toast_text = text
