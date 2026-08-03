@@ -10,7 +10,7 @@ script = ExtResource("1_m4in")
 [node name="HudLabel" type="Label" parent="CanvasLayer"]
 offset_left = 14.0
 offset_top = 12.0
-offset_right = 577.0
+offset_right = 900.0
 offset_bottom = 38.0
 text = "Credits: 600   Cargo: 0/30   Goal: 2000"
 
