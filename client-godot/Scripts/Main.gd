@@ -2729,6 +2729,8 @@ func save_state() -> void:
 			"anchor_station_id": str(npc["anchor_station_id"]),
 			"system_id": str(npc["system_id"]),
 			"dest_station_id": str(npc["dest_station_id"]),
+			"dest_system_id": str(npc["dest_system_id"]),
+			"intersystem_travel_timer": float(npc["intersystem_travel_timer"]),
 			"state": str(npc["state"]),
 			"position_x": float(npc["visual_position"].x),
 			"position_y": float(npc["visual_position"].y),
@@ -2853,6 +2855,12 @@ func load_state() -> void:
 			var saved_faction: String = str(npc_data.get("faction", ""))
 			if saved_faction.is_empty():
 				saved_faction = str(NPC_FACTIONS[rng.randi() % NPC_FACTIONS.size()])
+			var loaded_dest_system_id: String = str(npc_data.get("dest_system_id", ""))
+			var loaded_intersystem_timer: float = float(npc_data.get("intersystem_travel_timer", 0.0))
+			var loaded_state: String = str(npc_data.get("state", "idle"))
+			if loaded_state == "traveling_intersystem" and loaded_dest_system_id.is_empty():
+				loaded_state = "idle"
+				loaded_intersystem_timer = 0.0
 			npcs.append({
 				"id": str(npc_data.get("id", "npc_" + str(npcs.size()))),
 				"ship_name": saved_ship_name,
@@ -2860,8 +2868,8 @@ func load_state() -> void:
 				"anchor_station_id": str(npc_data.get("anchor_station_id", "")),
 				"system_id": npc_sys,
 				"dest_station_id": str(npc_data.get("dest_station_id", "")),
-				"dest_system_id": "",
-				"state": str(npc_data.get("state", "idle")),
+				"dest_system_id": loaded_dest_system_id,
+				"state": loaded_state,
 				"position": npc_pos,
 				"visual_position": npc_pos,
 				"target_position": npc_pos,
@@ -2869,5 +2877,5 @@ func load_state() -> void:
 				"travel_duration": 1.0,
 				"inventory": {"capacity": 24, "stacks": npc_stacks},
 				"credits": float(npc_data.get("credits", 200)),
-				"intersystem_travel_timer": 0.0
+				"intersystem_travel_timer": loaded_intersystem_timer
 			})
