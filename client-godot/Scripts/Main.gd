@@ -380,7 +380,8 @@ func _process(delta: float) -> void:
 
 	economy_accumulator += delta
 	npc_accumulator += delta
-	save_accumulator += delta
+	if not is_web_export():
+		save_accumulator += delta
 
 	if economy_accumulator >= ECONOMY_TICK:
 		economy_accumulator = 0.0
@@ -392,7 +393,7 @@ func _process(delta: float) -> void:
 
 	update_npc_visuals(delta)
 
-	if save_accumulator >= SAVE_TICK:
+	if not is_web_export() and save_accumulator >= SAVE_TICK:
 		save_accumulator = 0.0
 		save_state()
 
@@ -654,6 +655,7 @@ func build_player_station() -> void:
 		"processing_income": 0
 	})
 	show_toast("Eigene Station in " + str(SYSTEMS[current_system_id]["display_name"]) + " gebaut!", 3.5)
+	save_checkpoint()
 
 
 func get_station_by_id(station_id: String) -> Dictionary:
@@ -1494,7 +1496,27 @@ func add_trade_log(entry: String) -> void:
 	trade_log.append(entry)
 	if trade_log.size() > MAX_TRADE_LOG:
 		trade_log.pop_front()
+	save_checkpoint()
 
+
+var _web_save_queued: bool = false
+
+func is_web_export() -> bool:
+	return OS.has_feature("web")
+
+
+func save_checkpoint() -> void:
+	if not is_web_export():
+		return
+	if _web_save_queued:
+		return
+	_web_save_queued = true
+	call_deferred("_flush_web_checkpoint")
+
+
+func _flush_web_checkpoint() -> void:
+	_web_save_queued = false
+	save_state()
 
 func show_toast(text: String, duration: float) -> void:
 	toast_text = text
@@ -2605,7 +2627,7 @@ func save_state() -> void:
 
 	var file := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
 	if file:
-		file.store_string(JSON.stringify(save_data, "\t"))
+		file.store_string(JSON.stringify(save_data))
 		file.close()
 
 
@@ -2737,4 +2759,3 @@ func load_state() -> void:
 				"credits": float(npc_data.get("credits", 200)),
 				"intersystem_travel_timer": 0.0
 			})
-
