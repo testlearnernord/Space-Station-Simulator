@@ -979,11 +979,32 @@ func run_npc_trades() -> void:
 			var timer: float = float(npc["intersystem_travel_timer"])
 			timer -= NPC_TICK
 			if timer <= 0.0:
-				npc["state"] = "idle"
 				npc["intersystem_travel_timer"] = 0.0
 				npc["system_id"] = str(npc["dest_system_id"])
 				npc["anchor_station_id"] = get_random_station_in_system(str(npc["system_id"]))
 				npc["dest_system_id"] = ""
+				# Snap visual position to anchor station in the new system
+				var new_anchor: Dictionary = get_station_by_id(str(npc["anchor_station_id"]))
+				if not new_anchor.is_empty():
+					npc["visual_position"] = new_anchor["position"]
+				# If NPC arrived with cargo, find a sell station immediately
+				var arriving_stacks: Dictionary = npc["inventory"]["stacks"]
+				var has_cargo_on_arrival := false
+				for v in arriving_stacks.values():
+					if int(v) > 0:
+						has_cargo_on_arrival = true
+						break
+				if has_cargo_on_arrival:
+					var sell_sid: String = _find_best_sell_station_for_cargo(npc, str(npc["system_id"]))
+					if sell_sid != "":
+						var sell_st: Dictionary = get_station_by_id(sell_sid)
+						npc["state"] = "traveling_to_sell"
+						npc["dest_station_id"] = sell_sid
+						set_npc_visual_target(npc, sell_st["position"])
+					else:
+						npc["state"] = "idle"
+				else:
+					npc["state"] = "idle"
 			else:
 				npc["intersystem_travel_timer"] = timer
 			continue
@@ -992,8 +1013,32 @@ func run_npc_trades() -> void:
 		var npc_sys: String = str(npc["system_id"])
 
 		if state == "idle":
-			# Small chance to travel to neighboring system
-			if rng.randf() < 0.02:
+			# If NPC has unsold cargo, find the best local sell station first.
+			# If no local buyer is available, try a neighboring system.
+			var idle_stacks: Dictionary = npc["inventory"]["stacks"]
+			var has_idle_cargo := false
+			for v in idle_stacks.values():
+				if int(v) > 0:
+					has_idle_cargo = true
+					break
+			if has_idle_cargo:
+				var sell_sid: String = _find_best_sell_station_for_cargo(npc, npc_sys)
+				if sell_sid != "":
+					var sell_st: Dictionary = get_station_by_id(sell_sid)
+					npc["state"] = "traveling_to_sell"
+					npc["dest_station_id"] = sell_sid
+					set_npc_visual_target(npc, sell_st["position"])
+					continue
+				# No local sell available — travel to a neighbor to unload cargo
+				var cargo_dest_sys: String = get_random_neighbor(npc_sys)
+				if cargo_dest_sys != "":
+					npc["state"] = "traveling_intersystem"
+					npc["dest_system_id"] = cargo_dest_sys
+					npc["intersystem_travel_timer"] = INTERSYSTEM_NPC_TRAVEL_TIME
+					continue
+
+			# Increased chance to travel to a neighboring system for better deals
+			if rng.randf() < 0.08:
 				var dest_sys: String = get_random_neighbor(npc_sys)
 				if dest_sys != "":
 					npc["state"] = "traveling_intersystem"
@@ -1076,9 +1121,18 @@ func _npc_execute_buy(npc: Dictionary) -> void:
 	buy_station["inventory"]["stacks"][rid] = station_stock - qty
 	npc_stacks[rid] = npc_stacks.get(rid, 0) + qty
 	npc["credits"] = npc_creds - total_cost
-	npc["dest_station_id"] = str(route["sell_station_id"])
-	npc["state"] = "traveling_to_sell"
-	set_npc_visual_target(npc, sell_station["position"])
+	# Check if a neighboring system offers significantly better sell prices (20%+ more).
+	# If yes, travel there to sell for a cross-region profit (40% chance to take the route).
+	var local_sell_p: float = compute_sell_price(sell_station, rid)
+	var cross_sys: String = _find_best_neighbor_for_sell(npc, local_sell_p, rid)
+	if cross_sys != "" and rng.randf() < 0.4:
+		npc["dest_system_id"] = cross_sys
+		npc["state"] = "traveling_intersystem"
+		npc["intersystem_travel_timer"] = INTERSYSTEM_NPC_TRAVEL_TIME
+	else:
+		npc["dest_station_id"] = str(route["sell_station_id"])
+		npc["state"] = "traveling_to_sell"
+		set_npc_visual_target(npc, sell_station["position"])
 
 
 func _npc_execute_buy_for_process(npc: Dictionary) -> void:
@@ -1251,6 +1305,63 @@ func find_npc_processing_route(sys_id: String) -> Dictionary:
 								"module_id": mod_id
 							}
 	return best
+
+
+# Returns the station_id of the best station in sys_id to sell the NPC's current cargo to.
+# Returns "" if the NPC has no cargo or no suitable station exists.
+func _find_best_sell_station_for_cargo(npc: Dictionary, sys_id: String) -> String:
+	var npc_stacks: Dictionary = npc["inventory"]["stacks"]
+	var best_station_id := ""
+	var best_value := -INF
+	for s in stations:
+		if str(s["system_id"]) != sys_id:
+			continue
+		var total_value := 0.0
+		var can_sell := false
+		var s_stacks: Dictionary = s["inventory"]["stacks"]
+		var s_cap: int = int(s["inventory"]["capacity"])
+		for rid in npc_stacks.keys():
+			var qty: int = int(npc_stacks.get(rid, 0))
+			if qty <= 0:
+				continue
+			var have: int = int(s_stacks.get(rid, 0))
+			var room: int = s_cap - have
+			if room > 0:
+				total_value += compute_sell_price(s, rid) * float(mini(qty, room))
+				can_sell = true
+		if can_sell and total_value > best_value:
+			best_value = total_value
+			best_station_id = str(s["id"])
+	return best_station_id
+
+
+# Returns a neighboring system_id if it offers at least 20% better sell price for rid
+# than local_sell_price. Returns "" if no neighbor qualifies.
+func _find_best_neighbor_for_sell(npc: Dictionary, local_sell_price: float, rid: String) -> String:
+	var npc_sys: String = str(npc["system_id"])
+	if not SYSTEMS.has(npc_sys):
+		return ""
+	var nbrs: Dictionary = SYSTEMS[npc_sys]["neighbors"]
+	var threshold: float = local_sell_price * 1.20
+	var best_sys := ""
+	var best_val: float = threshold
+	for dir in nbrs.keys():
+		var nsys: String = str(nbrs[dir])
+		if nsys == "":
+			continue
+		for s in stations:
+			if str(s["system_id"]) != nsys:
+				continue
+			var s_stacks: Dictionary = s["inventory"]["stacks"]
+			var s_cap: int = int(s["inventory"]["capacity"])
+			var have: int = int(s_stacks.get(rid, 0))
+			var room: int = s_cap - have
+			if room > 0:
+				var sell_p: float = compute_sell_price(s, rid)
+				if sell_p > best_val:
+					best_val = sell_p
+					best_sys = nsys
+	return best_sys
 
 
 func get_random_neighbor(sys_id: String) -> String:
@@ -1824,25 +1935,26 @@ func draw_trade_interface(station: Dictionary) -> void:
 	var vp: Vector2 = get_viewport_rect().size
 	var font: Font = ThemeDB.fallback_font
 
-	# Station info panel (top-left)
-	var info_rect := Rect2(10.0, 10.0, 230.0, 105.0)
+	# Station info panel (top-left, positioned below HUD labels at y≥78)
+	var info_top := 78.0
+	var info_rect := Rect2(10.0, info_top, 230.0, 105.0)
 	draw_rect(info_rect, PANEL_COLOR)
 	draw_rect(info_rect, PANEL_BORDER, false, 1.2)
 	var sname: String = str(station["display_name"])
 	var stype_id: String = str(station["type_id"])
 	var stype_name: String = str(STATION_TYPES[stype_id]["display_name"])
 	var sys_name: String = str(SYSTEMS[current_system_id]["display_name"])
-	draw_string(font, Vector2(18.0, 28.0), sname, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color.WHITE)
-	draw_string(font, Vector2(18.0, 46.0), stype_name, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, STATION_COLOR)
-	draw_string(font, Vector2(18.0, 61.0), sys_name, HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.72, 0.72, 0.9))
+	draw_string(font, Vector2(18.0, info_top + 18.0), sname, HORIZONTAL_ALIGNMENT_LEFT, -1, 14, Color.WHITE)
+	draw_string(font, Vector2(18.0, info_top + 36.0), stype_name, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, STATION_COLOR)
+	draw_string(font, Vector2(18.0, info_top + 51.0), sys_name, HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.72, 0.72, 0.9))
 	var inv: Dictionary = station["inventory"]
 	var station_stacks: Dictionary = inv["stacks"]
 	var station_used: int = station_stacks.values().reduce(func(a, b): return a + b, 0)
 	var station_cap: int = int(inv["capacity"])
 	var income: int = int(station["processing_income"])
-	draw_string(font, Vector2(18.0, 77.0), "Lager: %d/%d" % [station_used, station_cap], HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.75, 0.75, 0.75))
+	draw_string(font, Vector2(18.0, info_top + 67.0), "Lager: %d/%d" % [station_used, station_cap], HORIZONTAL_ALIGNMENT_LEFT, -1, 10, Color(0.75, 0.75, 0.75))
 	if income > 0:
-		draw_string(font, Vector2(18.0, 93.0), "Verarbeitungseinnahmen: %d Cr" % income, HORIZONTAL_ALIGNMENT_LEFT, -1, 10, CREDIT_COLOR)
+		draw_string(font, Vector2(18.0, info_top + 83.0), "Verarbeitungseinnahmen: %d Cr" % income, HORIZONTAL_ALIGNMENT_LEFT, -1, 10, CREDIT_COLOR)
 
 	# Determine panel height based on module count
 	var station_modules: Array = station["modules"]
@@ -1914,7 +2026,7 @@ func draw_trade_panel(station: Dictionary, vp: Vector2, font: Font, extra_height
 		draw_string(font, Vector2(px + 195.0, row_y + 20.0), str(station_amt), HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color.WHITE)
 		var stock_lbl: String = get_stock_state_label(station, rid)
 		if stock_lbl != "":
-			draw_string(font, Vector2(px + 195.0 + STOCK_STATE_OFFSET * 0.4, row_y + 20.0), stock_lbl, HORIZONTAL_ALIGNMENT_LEFT, -1, 9, get_stock_state_color(stock_lbl))
+			draw_string(font, Vector2(px + 195.0, row_y + 30.0), stock_lbl, HORIZONTAL_ALIGNMENT_LEFT, -1, 8, get_stock_state_color(stock_lbl))
 
 		# Player inventory
 		var player_amt: int = int(row["amount"])
@@ -2617,6 +2729,8 @@ func save_state() -> void:
 			"anchor_station_id": str(npc["anchor_station_id"]),
 			"system_id": str(npc["system_id"]),
 			"dest_station_id": str(npc["dest_station_id"]),
+			"dest_system_id": str(npc["dest_system_id"]),
+			"intersystem_travel_timer": float(npc["intersystem_travel_timer"]),
 			"state": str(npc["state"]),
 			"position_x": float(npc["visual_position"].x),
 			"position_y": float(npc["visual_position"].y),
@@ -2741,6 +2855,12 @@ func load_state() -> void:
 			var saved_faction: String = str(npc_data.get("faction", ""))
 			if saved_faction.is_empty():
 				saved_faction = str(NPC_FACTIONS[rng.randi() % NPC_FACTIONS.size()])
+			var loaded_dest_system_id: String = str(npc_data.get("dest_system_id", ""))
+			var loaded_intersystem_timer: float = float(npc_data.get("intersystem_travel_timer", 0.0))
+			var loaded_state: String = str(npc_data.get("state", "idle"))
+			if loaded_state == "traveling_intersystem" and loaded_dest_system_id.is_empty():
+				loaded_state = "idle"
+				loaded_intersystem_timer = 0.0
 			npcs.append({
 				"id": str(npc_data.get("id", "npc_" + str(npcs.size()))),
 				"ship_name": saved_ship_name,
@@ -2748,8 +2868,8 @@ func load_state() -> void:
 				"anchor_station_id": str(npc_data.get("anchor_station_id", "")),
 				"system_id": npc_sys,
 				"dest_station_id": str(npc_data.get("dest_station_id", "")),
-				"dest_system_id": "",
-				"state": str(npc_data.get("state", "idle")),
+				"dest_system_id": loaded_dest_system_id,
+				"state": loaded_state,
 				"position": npc_pos,
 				"visual_position": npc_pos,
 				"target_position": npc_pos,
@@ -2757,5 +2877,5 @@ func load_state() -> void:
 				"travel_duration": 1.0,
 				"inventory": {"capacity": 24, "stacks": npc_stacks},
 				"credits": float(npc_data.get("credits", 200)),
-				"intersystem_travel_timer": 0.0
+				"intersystem_travel_timer": loaded_intersystem_timer
 			})
